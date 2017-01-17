@@ -85,7 +85,16 @@ class ScoreDict:
     Returns the total accuracy for the given ScoreDict
     """
     def getAccuracy(self):
+        if sum(self._correctDict.values()) == 0:
+            return 0.0
         return 100.0 * sum(self._correctDict.values()) / sum(self._goldDict.values())
+    #enddef
+
+    """
+    Returns the number of correctly classified items
+    """
+    def getCorrectCount(self):
+        return sum(self._correctDict.values())
     #enddef
 
     """
@@ -113,7 +122,17 @@ class ScoreDict:
         for i in range(len(keys)):
             format_str += "%-" + str(max_len) + "s"
 
-        totalPred = sum(self._confusion.values())
+        # each cell includes a percentage, reflecting
+        # how much of the column is accounted for in the cell
+        col_totals = defaultdict(int)
+        for i in range(len(keys)):
+            pred_label = keys[i]
+            for j in range(len(keys)):
+                gold_label = keys[j]
+                col_totals[gold_label] += self._confusion[(gold_label, pred_label)]
+            #endfor
+        #endfor
+
         matrix = list()
         col_headers = list()
         col_headers.append("")
@@ -130,7 +149,7 @@ class ScoreDict:
             for j in range(len(keys)):
                 gold_label = keys[j]
                 count = self._confusion[(gold_label, pred_label)]
-                count_str = "%d (%.1f%%)" % (int(count), 100.0 * count / totalPred)
+                count_str = "%d (%.1f%%)" % (int(count), 100.0 * count / col_totals[gold_label])
                 row.append(count_str)
             #endfor
             matrix.append(row)
