@@ -54,7 +54,6 @@ def __dep__load_feats_data(filename, max_feat_idx, log=None):
     return x, y, ids
 #enddef
 
-
 """
 Loads the data into a scipy sparse matrix from the given filename,
 returning an (X, Y, IDs) tuple, or
@@ -95,13 +94,13 @@ def load_feats_data(filename, meta_dict=None, ignored_feats=None, log=None):
             vectorSplit = commentSplit[0].strip().split(" ")
 
             #the label is the first element
-            y_vals.append(int(float(vectorSplit[0])))
+            y_vals.append(int(float(vectorSplit[0].strip())))
 
             #iterate through the vector
-            for i in range(1,len(vectorSplit)):
+            for i in range(1, len(vectorSplit)):
                 kvPair = vectorSplit[i].split(":")
                 if float(kvPair[1]) > 0.0:
-                    idx = int(kvPair[0])
+                    idx = int(kvPair[0].strip())
                     adj_idx = idx
 
                     # If this is one of the ignored features, drop it
@@ -117,7 +116,7 @@ def load_feats_data(filename, meta_dict=None, ignored_feats=None, log=None):
 
                     x_rows.append(rowCount)
                     x_cols.append(adj_idx)
-                    x_vals.append(float(kvPair[1]))
+                    x_vals.append(float(kvPair[1].strip()))
             #endfor
             rowCount += 1
 
@@ -146,13 +145,20 @@ def load_feats_data(filename, meta_dict=None, ignored_feats=None, log=None):
     return x, y, ids
 #enddef
 
+"""
+Whether this idx is one of our ignored features (checks
+the ranges and values in the meta_dict)
+"""
 def is_ignored_idx(idx, meta_dict, ignored_feats):
+    is_ignored = False
     for feat in ignored_feats:
         val = meta_dict[feat]
         if isinstance(val, list):
-            return val[0] <= idx <= val[1]
+            is_ignored |= val[0] <= idx <= val[1]
         else:
-            return idx == val
+            is_ignored |= idx == val
+        #endif
+    return is_ignored
 #enddef
 
 """
@@ -163,4 +169,22 @@ def dump_args(arg_dict, log):
     for arg in arg_dict.keys():
         log.debug(None, "%s: %s", arg, str(arg_dict[arg]))
         #endfor
+#enddef
+
+
+"""
+Returns the idx with the max value (in the arr)
+"""
+def get_max_idx(arr):
+    idx = -1
+    if isinstance(arr, list):
+        max_idx = -float('inf')
+        for i in range(0, len(arr)):
+            if arr[i] > max_idx:
+                max_idx = arr[i]
+                idx = i
+            #endif
+        #endfor
+    #endif
+    return idx
 #enddef

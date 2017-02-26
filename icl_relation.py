@@ -1,33 +1,17 @@
-import numpy as np
-from scipy import sparse
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import normalize
 import cPickle
-from os.path import abspath, expanduser, isfile
+from os.path import abspath, expanduser
 from argparse import ArgumentParser
 from ScoreDict import ScoreDict
 from LogUtil import LogUtil
 import icl_util as util
 import json
 
-def load_nonvis_ids():
-    global nonvis_file
-    ids_nonvis_gold = set()
-    with open(nonvis_file, 'r') as f:
-        f.seek(0)
-        for line in f:
-            commentSplit = line.split(" # ")
-            vectorSplit = commentSplit[0].strip().split(" ")
-            if int(float(vectorSplit[0])) == 1:
-                ids_nonvis_gold.add(commentSplit[1].strip())
-        #endfor
-        f.close()
-    #endwith
-    return ids_nonvis_gold
-#enddef
-
-def train(solver, max_iter, balance, norm,
-          warm_start, multiclass_mode, ignored_feats=set()):
+"""
+Trains the relation model as a multinomial logistic regression model
+"""
+def train(solver, max_iter, balance, norm, warm_start, multiclass_mode, ignored_feats=set()):
     global log, meta_dict, train_file, model_file
 
     log.tic('info', "Loading training data")
@@ -42,7 +26,7 @@ def train(solver, max_iter, balance, norm,
         class_weight = 'balanced'
     #endif
     logistic = LogisticRegression(class_weight=class_weight, solver=solver,
-                 max_iter=max_iter, multi_class=multiclass_mode, n_jobs=-1, verbose=1,
+                 max_iter=max_iter, multi_class=multiclass_mode, n_jobs=-1,
                  warm_start=warm_start)
     logistic.fit(x, y)
     log.toc('info')
@@ -52,8 +36,40 @@ def train(solver, max_iter, balance, norm,
         cPickle.dump(logistic, pickle_file)
 #enddef
 
+"""
+Saves predicted scores to file
+"""
+def save_scores(ignored_feats=set()):
+    global log, eval_file, model_file, scores_file, meta_dict
+
+    log.info("Loading model from file")
+    learner = cPickle.load(open(model_file, 'r'))
+
+    log.info("Loading eval data")
+    x_eval, y_eval, ids_eval = \
+        util.load_feats_data(eval_file, meta_dict,
+                             ignored_feats, log)
+
+    log.info("Predicting scores")
+    y_pred_probs = learner.predict_log_proba(x_eval)
+
+    log.info("Writing probabilities to " + scores_file)
+    with open(scores_file, 'w') as f:
+        for i in range(len(ids_eval)):
+            line = list()
+            line.append(ids_eval[i])
+            for j in range(len(y_pred_probs[i])):
+                line.append(str(y_pred_probs[i][j]))
+            f.write(','.join(line) + '\n')
+        f.close()
+    #endwith
+#enddef
+
+"""
+Evaluates the saved model against the eval file
+"""
 def evaluate(norm, ignored_feats=set()):
-    global log, eval_file, model_file, nonvis_file, meta_dict
+    global log, eval_file, model_file, nonvis_file, scores_file, meta_dict
 
     log.info("Loading model from file")
     logistic = cPickle.load(open(model_file, 'r'))
@@ -135,8 +151,33 @@ def evaluate(norm, ignored_feats=set()):
             f.write(','.join(line) + '\n')
         #endfor
     #endif
+
+    print "Acc: " + str(scores.getAccuracy()) + "%"
 #enddef
 
+"""
+Loads nonvisual IDs
+"""
+def load_nonvis_ids():
+    global nonvis_file
+    ids_nonvis_gold = set()
+    with open(nonvis_file, 'r') as f:
+        f.seek(0)
+        for line in f:
+            commentSplit = line.split(" # ")
+            vectorSplit = commentSplit[0].strip().split(" ")
+            if int(float(vectorSplit[0])) == 1:
+                ids_nonvis_gold.add(commentSplit[1].strip())
+        #endfor
+        f.close()
+    #endwith
+    return ids_nonvis_gold
+#enddef
+
+
+"""
+Tunes the parameters over the model
+"""
 def tune():
     global train_file, eval_file, meta_dict
 
@@ -200,26 +241,17 @@ def tune():
     #endfor
 #enddef
 
-
-
 # At one time I had more arguments, but in the end it's much
 # easier not to specify all this on the command line
 log = LogUtil(lvl='debug', delay=45)
-train_file = "~/source/data/feats/flickr30kEntities_v2_pairwise_train_iou.feats"
-train_file = abspath(expanduser(train_file))
-eval_file = "~/source/data/feats/flickr30kEntities_v2_pairwise_dev_iou.feats"
-eval_file = abspath(expanduser(eval_file))
-scores_file = eval_file.replace(".feats", ".scores")
-meta_file = train_file.replace(".feats", "_meta.json")
-nonvis_file = "~/source/data/feats//flickr30kEntities_v2_nonvis_dev_iou.feats"
+nonvis_file = "~/source/data/feats//flickr30kEntities_v2_nonvis_dev.feats"
 nonvis_file = abspath(expanduser(nonvis_file))
 meta_nonvis_file = nonvis_file.replace(".feats", "_meta.json")
-model_file = "pairwise.model"
 
 # Parse what arguments remain
 solvers = ['lbfgs', 'newton-cg', 'sag']
 multiclass_modes = ['multinomial', 'ovr']
-parser = ArgumentParser("ImageCaptionLearn_py: Pairwise Mention Identity Classifier")
+parser = ArgumentParser("ImageCaptionLearn_py: Pairwise Relation Classifier")
 parser.add_argument("--norm", type=str, help="preproc opt; Specify data normalization")
 parser.add_argument("--train", action='store_true', help="Trains and saves a model")
 parser.add_argument("--eval", action='store_true', help="Evaluates using a saved model")
@@ -233,20 +265,38 @@ parser.add_argument("--balance", action='store_true',
                     help="train_opt; Whether to use class weights inversely proportional to the data distro")
 parser.add_argument("--mcc_mode", choices=multiclass_modes, default=multiclass_modes[0],
                     help="train opt; multiclass mode")
+parser.add_argument("--train_file", type=str, help="train feats file")
+parser.add_argument("--eval_file", type=str, help="eval feats file")
+parser.add_argument("--meta_file", type=str, help="meta feature file (typically associated with train file)")
+parser.add_argument("--model_file", type=str, help="saves model to file")
 args = parser.parse_args()
 arg_dict = vars(args)
 util.dump_args(arg_dict, log)
+train_file = abspath(expanduser(arg_dict['train_file']))
+eval_file = abspath(expanduser(arg_dict['eval_file']))
+meta_file = abspath(expanduser(arg_dict['meta_file']))
+model_file = abspath(expanduser(arg_dict['model_file']))
+scores_file = eval_file.replace(".feats", ".scores")
+
 
 # load the meta dict
 meta_dict = json.load(open(meta_file, 'r'))
 
+log.info("Ignoring hypernym_bow")
+fixed_ignored = {"hypernym_bow"}
+
 # Train
 if arg_dict['train']:
-    train(arg_dict['solver'], arg_dict['max_iter'], arg_dict['balance'],
-          arg_dict['norm'], arg_dict['warm'], arg_dict['mcc_mode'])
+    train(arg_dict['solver'], arg_dict['max_iter'],
+          arg_dict['balance'], arg_dict['norm'],
+          arg_dict['warm'], arg_dict['mcc_mode'],
+          fixed_ignored)
+    save_scores(fixed_ignored)
 # Evaluate
 if arg_dict['eval']:
-    evaluate(arg_dict['norm'])
+    evaluate(arg_dict['norm'], fixed_ignored)
+    save_scores(fixed_ignored)
+
 #Ablate
 ablation_str = arg_dict['ablation']
 if ablation_str is not None:
@@ -281,20 +331,3 @@ if ablation_str is not None:
         evaluate(arg_dict['norm'], ignored)
     #endfor
 #endif
-
-
-
-""" -- single mods --
----Confusion matrix---
-   | 0              1              2              3
-0  | 753224 (98.0%) 21475 (15.8%)  4055 (39.8%)   4045 (39.8%)
-1  | 11703 (1.5%)   113887 (83.8%) 769 (7.6%)     761 (7.5%)
-2  | 1957 (0.3%)    283 (0.2%)     5335 (52.4%)   22 (0.2%)
-3  | 1958 (0.3%)    283 (0.2%)     23 (0.2%)      5338 (52.5%)
----Scores---
-0	P:  96.22% | R:  97.97% | F1:  97.09% - 768842 (83.11%)
-1	P:  89.59% | R:  83.78% | F1:  86.59% - 135928 (14.69%)
-2	P:  70.23% | R:  52.40% | F1:  60.01% - 10182 (1.10%)
-3	P:  70.22% | R:  52.51% | F1:  60.09% - 10166 (1.10%)
-
-"""

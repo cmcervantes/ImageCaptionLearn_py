@@ -31,6 +31,25 @@ class ScoreDict:
     #enddef
 
     """
+    Increments the internal dictionaries with
+    all the instances in the given score_dict
+    """
+    def merge(self, score_dict):
+        for label in score_dict._goldDict.keys():
+            self._goldDict[label] += score_dict._goldDict[label]
+            self.keys.add(label)
+        for label in score_dict._predDict.keys():
+            self._predDict[label] += score_dict._predDict[label]
+            self.keys.add(label)
+        for label in score_dict._correctDict.keys():
+            self._correctDict[label] += score_dict._correctDict[label]
+            self.keys.add(label)
+        for labels in score_dict._confusion.keys():
+            self._confusion[labels] += score_dict._confusion[labels]
+    #enddef
+
+
+    """
     Returns a Score object for a given label
     """
     def getScore(self, label):
@@ -149,7 +168,10 @@ class ScoreDict:
             for j in range(len(keys)):
                 gold_label = keys[j]
                 count = self._confusion[(gold_label, pred_label)]
-                count_str = "%d (%.1f%%)" % (int(count), 100.0 * count / col_totals[gold_label])
+                perc = 0.0
+                if col_totals[gold_label] > 0:
+                    perc = 100.0 * count / col_totals[gold_label]
+                count_str = "%d (%.1f%%)" % (int(count), perc)
                 row.append(count_str)
             #endfor
             matrix.append(row)
