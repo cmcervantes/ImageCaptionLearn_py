@@ -171,6 +171,69 @@ def dump_args(arg_dict, log):
         #endfor
 #enddef
 
+"""
+Returns the list as an evenly-divided
+list of lists (for processing as a table)
+"""
+def list_to_rows(lst, num_cols):
+    lst = list(lst)
+
+    #add a row if the list isn't neatly divisible
+    num_rows = len(lst) / num_cols
+    if len(lst) % num_rows > 0:
+        num_rows += 1
+
+    #partition the list into a list of rows
+    rows = list()
+    for i in range(0, num_rows):
+        row = list()
+        for j in range(i * num_cols, (i+1) * num_cols):
+            if j < len(lst):
+                row.append(str(lst[j]))
+            else:
+                row.append("")
+        rows.append(row)
+    return rows
+#enddef
+
+"""
+Returns a string representing a row
+collection (list of lists) as a formatted table
+"""
+def rows_to_str(rows, use_latex):
+    num_cols = len(rows[0])
+
+    table_str = ""
+    if use_latex:
+        header = '\\begin{tabular}{'
+        for i in range(0, num_cols):
+            header += 'l'
+        header += '}'
+        table_str += header + "\n"
+
+        for i in range(0, len(rows)):
+            row_str = '\t'+' & '.join(rows[i])
+            if i < len(rows) - 1:
+                row_str += "\\\\"
+            table_str += row_str + "\n"
+        table_str += "\\end{tabular}"
+    else:
+        max_len = 0
+        for row in rows:
+            for cell in row:
+                if len(cell) > max_len:
+                    max_len = len(cell)
+        max_len += 1
+        format_str = ""
+        for i in range(0, num_cols):
+            format_str += "%-" + str(max_len) + "s"
+        format_str += "\n"
+        for row in rows:
+            table_str += format_str % tuple(row)
+        table_str = table_str[0:len(table_str)-1]
+    #endif
+    return table_str
+#enddef
 
 """
 Returns the idx with the max value (in the arr)
