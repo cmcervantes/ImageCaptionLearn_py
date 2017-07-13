@@ -83,7 +83,9 @@ def evaluate(norm, ignored_feats=set()):
     #endif
 
     log.info("Loading gold nonvis data from file")
-    ids_nonvis_gold = load_nonvis_ids()
+    ids_nonvis_gold = set()
+    if nonvis_file is not None:
+        ids_nonvis_gold = load_nonvis_ids()
 
     log.info("Evaluating")
     y_pred_probs = logistic.predict_log_proba(x_eval)
@@ -244,9 +246,6 @@ def tune():
 # At one time I had more arguments, but in the end it's much
 # easier not to specify all this on the command line
 log = LogUtil(lvl='debug', delay=45)
-nonvis_file = "~/source/data/feats//flickr30kEntities_v2_nonvis_dev.feats"
-nonvis_file = abspath(expanduser(nonvis_file))
-meta_nonvis_file = nonvis_file.replace(".feats", "_meta.json")
 
 # Parse what arguments remain
 solvers = ['lbfgs', 'newton-cg', 'sag']
@@ -269,15 +268,25 @@ parser.add_argument("--train_file", type=str, help="train feats file")
 parser.add_argument("--eval_file", type=str, help="eval feats file")
 parser.add_argument("--meta_file", type=str, help="meta feature file (typically associated with train file)")
 parser.add_argument("--model_file", type=str, help="saves model to file")
+parser.add_argument("--nonvis_file", type=str, help="Retrieves nonvis labels from file; excludes from eval")
 args = parser.parse_args()
 arg_dict = vars(args)
 util.dump_args(arg_dict, log)
-train_file = abspath(expanduser(arg_dict['train_file']))
-eval_file = abspath(expanduser(arg_dict['eval_file']))
+train_file = None
+if arg_dict['train_file'] is not None:
+    train_file = abspath(expanduser(arg_dict['train_file']))
+eval_file = None
+if arg_dict['eval_file'] is not None:
+    eval_file = abspath(expanduser(arg_dict['eval_file']))
 meta_file = abspath(expanduser(arg_dict['meta_file']))
 model_file = abspath(expanduser(arg_dict['model_file']))
 scores_file = eval_file.replace(".feats", ".scores")
-
+nonvis_file = None
+meta_nonvis_file = None
+if arg_dict['nonvis_file'] is not None:
+    nonvis_file = abspath(expanduser(arg_dict['nonvis_file']))
+    meta_nonvis_file = nonvis_file.replace(".feats", "_meta.json")
+#endif
 
 # load the meta dict
 meta_dict = json.load(open(meta_file, 'r'))

@@ -124,10 +124,16 @@ model_file = "models/box_card.model"
 meta_file = abspath(expanduser("~/source/data/feats/card_train_20170214_meta.json"))
 '''
 
-train_file = abspath(expanduser(arg_dict['train_file']))
-eval_file = abspath(expanduser(arg_dict['eval_file']))
+train_file = ''
+if arg_dict['train_file'] is not None:
+    train_file = abspath(expanduser(arg_dict['train_file']))
+eval_file = ''
+if arg_dict['eval_file'] is not None:
+    eval_file = abspath(expanduser(arg_dict['eval_file']))
 scores_file = eval_file.replace(".feats", ".scores")
-model_file = abspath(expanduser(arg_dict['model_file']))
+model_file = ''
+if arg_dict['model_file'] is not None:
+    model_file = abspath(expanduser(arg_dict['model_file']))
 meta_file = abspath(expanduser(arg_dict['meta_file']))
 meta_dict = json.load(open(meta_file, 'r'))
 max_iter = arg_dict['max_iter']
@@ -136,8 +142,6 @@ warm_start = arg_dict['warm']
 
 # Ablation testing found hypernym box doesn't work very well
 fixed_ignored = {"hypernym_bow"}
-
-evaluate(fixed_ignored)
 
 if arg_dict['train']:
     train(max_iter, balance, warm_start, fixed_ignored)

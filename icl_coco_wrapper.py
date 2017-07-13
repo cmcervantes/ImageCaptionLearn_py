@@ -28,6 +28,8 @@ def show_image(coco_obj, img):
     plt.show()
 #enddef
 
+
+
 dataDir = abspath(expanduser("~/source/data/mscoco/"))
 dataType = 'train2014'
 instance_file = '%s/annotations/instances_%s.json' % (dataDir, dataType)
@@ -45,6 +47,7 @@ log.info("Coco Categories")
 nms = [cat['name'] for cat in cats]
 cat_rows = util.list_to_rows(nms, 4)
 print util.rows_to_str(cat_rows, False)
+
 log.info("Super Categories")
 nms = set([cat['supercategory'] for cat in cats])
 cat_rows = util.list_to_rows(nms, 4)
@@ -53,11 +56,27 @@ cat_dict = dict()
 for cat in cats:
     cat_dict[cat['id']] = cat
 
+super_dict = dict()
+for cat in cats:
+    scat = cat['supercategory']
+    if scat not in super_dict:
+        super_dict[scat] = set()
+    super_dict[scat].add(cat['name'])
+for scat in super_dict.keys():
+    print scat
+    for cat in super_dict[scat]:
+        print "\t" + cat
+quit()
+
 # load images with specific categories
 log.info("Loading images")
 use_rand = False
+get_all = True
 img_ids = list()
-if use_rand:
+if get_all:
+    log.info("Retrieving all images")
+    img_ids = coco.getImgIds()
+elif use_rand:
     total_imgs = len(coco.getImgIds())
     cat_ids = coco.getCatIds(catNms=['person', 'animal'])
     cat_img_ids = coco.getImgIds(catIds=cat_ids)
@@ -66,7 +85,8 @@ if use_rand:
     img_ids = random.sample(cat_img_ids, 250)
 else:
     with open('coco_sub_train_imgs_orig.txt', 'r') as f:
-        for line in f.xreadlines():
+        for line in f.readlines():
+            line = line.strip()
             line = line.replace("COCO_" + dataType + "_", "")
             line = line.replace(".jpg", "")
             img_ids.append(int(line))
@@ -77,19 +97,29 @@ else:
 imgs = coco.loadImgs(img_ids)
 
 # write the img IDs, captions, and bounding boxes to a file
-sub_img_ids = list()
 ll_captions = list()
 ll_bbox = list()
+ll_img = list()
 
 for img in imgs:
     #store the image IDs
-    img_id_str = "COCO_" + dataType + "_%012d.jpg" % (img['id'])
-    sub_img_ids.append(img_id_str + "\n")
+    img_id_str = "%012d.jpg" % (img['id'])
+    cross_val = -1
+    if "train" in dataType:
+        cross_val = 1
+    elif "val" in dataType:
+        cross_val = 0
+    ll_img.append('%s,%s,%d,%d,%d\n' %
+        (img_id_str, img['flickr_url'], cross_val, img['height'], img['width']))
 
     #captions
     captions = get_captions(coco_caps, img['id'])
     for i in range(0, len(captions)):
-        ll_captions.append(img_id_str + "#" + str(i) + "\t" + captions[i].strip() + "\n")
+        #strip whitespace, newlines, and brackets from
+        #inside captions
+        cap = captions[i].strip().replace('\n', '')
+        cap = cap.replace('[', '').replace(']','')
+        ll_captions.append(img_id_str + "#" + str(i) + "\t" + cap + "\n")
 
     #and bounding boxes
     annIDs = coco.getAnnIds(imgIds=img['id'], iscrowd=None)
@@ -106,12 +136,13 @@ for img in imgs:
     #endfor
 #endfor
 
-with open('coco_sub_train_imgs.txt', 'w') as f:
-    f.writelines(sub_img_ids)
+log.info("Writing Files")
+with open('coco_' + dataType + '_imgs.txt', 'w') as f:
+    f.writelines(ll_img)
     f.close()
-with open('coco_sub_train_caps.txt', 'w') as f:
+with open('coco_' + dataType + '_caps.txt', 'w') as f:
     f.writelines(ll_captions)
     f.close()
-with open('coco_sub_train_bbox.csv', 'w') as f:
+with open('coco_' + dataType + '_bbox.csv', 'w') as f:
     f.writelines(ll_bbox)
     f.close()

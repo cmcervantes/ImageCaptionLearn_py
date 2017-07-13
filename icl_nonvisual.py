@@ -312,13 +312,6 @@ def nonvis_with_grounding(max_iter):
 #enddef
 
 log = LogUtil(lvl='debug', delay=45)
-train_file = "~/source/data/feats/nonvis_20170215.feats"
-train_file = abspath(expanduser(train_file))
-eval_file = "~/source/data/feats/nonvis_test_20170215.feats"
-eval_file = abspath(expanduser(eval_file))
-scores_file = eval_file.replace(".feats", ".scores")
-model_file = "models/nonvis.model"
-meta_file = train_file.replace(".feats", "_meta.json")
 
 models = ['svm', 'logistic', 'decision_tree', 'random_forest']
 parser = ArgumentParser("ImageCaptionLearn_py: Nonvisual Mention Classifier")
@@ -333,9 +326,29 @@ parser.add_argument("--balance", action='store_true',
                     help="train_opt; Whether to use class weights inversely proportional to the data distro")
 parser.add_argument("--num_estimators", type=int, default=100, help="train_opt; Number of trees for random_forest")
 parser.add_argument("--warm", action='store_true', help='train_opt; Whether to use warm start')
+parser.add_argument("--train_file", type=str, help="train feats file")
+parser.add_argument("--eval_file", type=str, help="eval feats file")
+parser.add_argument("--meta_file", type=str, help="meta feature file (typically associated with train file)")
+parser.add_argument("--model_file", type=str, help="saves model to file")
 args = parser.parse_args()
 arg_dict = vars(args)
 util.dump_args(arg_dict, log)
+train_file = None
+if arg_dict['train_file'] is not None:
+    train_file = abspath(expanduser(arg_dict['train_file']))
+eval_file = None
+if arg_dict['eval_file'] is not None:
+    eval_file = abspath(expanduser(arg_dict['eval_file']))
+meta_file = abspath(expanduser(arg_dict['meta_file']))
+model_file = abspath(expanduser(arg_dict['model_file']))
+scores_file = eval_file.replace(".feats", ".scores")
+
+#train_file = "~/source/data/feats/nonvis_20170215.feats"
+#eval_file = "~/source/data/feats/nonvis_test_20170215.feats"
+#model_file = "models/nonvis.model"
+#meta_file = train_file.replace(".feats", "_meta.json")
+
+
 
 meta_dict = json.load(open(meta_file, 'r'))
 
