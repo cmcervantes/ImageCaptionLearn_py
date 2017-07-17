@@ -24,6 +24,7 @@ def train(model, balance, max_iter=None, max_depth=None,
 
     log.tic('info', "Loading training data")
     x, y, ids = util.load_feats_data(train_file, meta_dict, ignored_feats, log)
+
     log.toc('info')
 
     log.tic('info', "Training")
@@ -74,6 +75,7 @@ def evaluate(lemma_file=None, hyp_file=None, ignored_feats=set(), save_scores=Tr
             #endfor
             f.close()
         #endwith
+    #endif
 
     hypernyms = set()
     if hyp_file is not None:

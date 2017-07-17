@@ -85,67 +85,92 @@ def load_nonvis_ids():
 #enddef
 
 log = LogUtil(lvl='debug', delay=45)
-#file_root = '~/source/data/feats/'
-#fit_id_file = abspath(expanduser(file_root + "cca_ids_dev.txt"))
-file_root = "~/data/tacl201708/"
-fit_prefix = "flickr30k_dev"
-eval_prefix = "mscoco_dev"
-fit_id_file = abspath(expanduser(file_root + fit_prefix + "_id.txt"))
-fit_label_file = abspath(expanduser(file_root + fit_prefix + "_label.txt"))
-fit_type_file = abspath(expanduser(file_root + fit_prefix + "_type.csv"))
-fit_scores_file = abspath(expanduser(file_root + fit_prefix + "_coco30kModel_ccaScores.csv"))
-eval_id_file = abspath(expanduser(file_root + eval_prefix + "_id.txt"))
-eval_label_file = abspath(expanduser(file_root + eval_prefix + "_label.txt"))
-eval_type_file = abspath(expanduser(file_root + eval_prefix + "_type.csv"))
-eval_scores_file = abspath(expanduser(file_root + eval_prefix + "_coco30kModel_ccaScores.csv"))
-scores_file = abspath(expanduser(file_root + eval_prefix + "_coco30kModel_affinity.scores"))
-
-nonvis_file = "~/data/tacl201708/feats/" + eval_prefix + "_nonvis.feats"
-nonvis_file = abspath(expanduser(nonvis_file))
-
-# load the data from the files
-type_id_dict, type_x_dict, type_y_dict = \
-    load_cca_data(fit_id_file, fit_scores_file, fit_label_file, fit_type_file)
-type_id_dict_eval, type_x_dict_eval, type_y_dict_eval = \
-    load_cca_data(eval_id_file, eval_scores_file, eval_label_file, eval_type_file)
 
 # Parse args
 parser = ArgumentParser("ImageCaptionLearn_py: Affinity Classifier")
-parser.add_argument("--max_iter", type=int, default=100,
-                    help="train opt; Specifies the max iterations")
+parser.add_argument("--train", action='store_true', help="Trains and saves a model")
+parser.add_argument("--eval", action='store_true', help="Evaluates using a saved model")
+parser.add_argument("--max_iter", type=int, default=100, help="train opt; Max SVM/logistic iterations")
+parser.add_argument("--data_root", type=str, default="~/data/tacl201708/", help="Data directory root (assumes scores, "
+                                                                                "feats, and cca subdirs)")
+parser.add_argument("--fit_prefix", type=str, default="flickr30k_dev", help="Prefix for fit files")
+parser.add_argument("--eval_prefix", type=str, default="flickr30k_dev", help="Prefix for evaluation files")
+parser.add_argument("--cca_model_type", type=str, default="30kModel", help="CCA model type (internal file name part)")
+parser.add_argument("--model_root", type=str, default="~/models/tacl201708/", help="Model directory root")
+
 args = parser.parse_args()
 arg_dict = vars(args)
 util.dump_args(arg_dict, log)
 
-# learn a separate curve for each lexical type
-for type in type_x_dict.keys():
-    log.info('Training ' + type)
-    x = np.array(type_x_dict[type]).reshape((-1,1))
-    y = np.array(type_y_dict[type])
-    learner = LogisticRegression(max_iter=arg_dict['max_iter'], n_jobs=-1)
-    learner.fit(x, y)
-    with open('models/cca_affinity_' + type + "_flickr30k.model", 'wb') as pickle_file:
-        cPickle.dump(learner, pickle_file)
-    #endwith
-#endfor
+data_root = arg_dict['data_root']
+fit_prefix = arg_dict['fit_prefix']
+eval_prefix = arg_dict['eval_prefix']
+cca_model_type = arg_dict['cca_model_type']
+model_root = arg_dict['model_root']
 
-# save the scores in a single file
-log.info('Saving scores')
-with open(scores_file, 'w') as f:
-    for type in type_x_dict_eval.keys():
-        x = np.array(type_x_dict_eval[type]).reshape((-1,1))
-        y = np.array(type_y_dict_eval[type])
-        learner = cPickle.load(open('models/cca_affinity_' + type +
-                                    "_flickr30k.model", 'r'))
-        y_pred_probs = learner.predict_log_proba(np.array(x))
-        ids = type_id_dict_eval[type]
-        for i in range(0, len(y)):
-            line = list()
-            line.append(ids[i])
-            for j in range(len(y_pred_probs[i])):
-                line.append(str(y_pred_probs[i][j]))
-            f.write(','.join(line) + '\n')
-        #endfor
+# Set up all the files
+fit_id_file = abspath(expanduser(data_root + "cca/" + fit_prefix + "_id.txt"))
+fit_label_file = abspath(expanduser(data_root + "cca/" + fit_prefix + "_label.txt"))
+fit_type_file = abspath(expanduser(data_root + "cca/" + fit_prefix + "_type.csv"))
+fit_scores_file = abspath(expanduser(data_root + "scores/" + fit_prefix +
+                                     "_" + cca_model_type + "_ccaScores.csv"))
+eval_id_file = abspath(expanduser(data_root + "cca/" + eval_prefix + "_id.txt"))
+eval_label_file = abspath(expanduser(data_root + "cca/" + eval_prefix + "_label.txt"))
+eval_type_file = abspath(expanduser(data_root + "cca/" + eval_prefix + "_type.csv"))
+eval_scores_file = abspath(expanduser(data_root + "scores/" + eval_prefix +
+                                      "_" + cca_model_type + "_ccaScores.csv"))
+scores_file = abspath(expanduser(data_root + "scores/" + eval_prefix +
+                                 "_" + cca_model_type + "_affinity.scores"))
+nonvis_file = abspath(expanduser(data_root + "feats/" + eval_prefix + "_nonvis.feats"))
+
+
+if arg_dict['train']:
+    type_id_dict, type_x_dict, type_y_dict = \
+        load_cca_data(fit_id_file, fit_scores_file, fit_label_file, fit_type_file)
+
+    # learn a separate curve for each lexical type
+    for type in type_x_dict.keys():
+        log.info('Training ' + type)
+        x = np.array(type_x_dict[type]).reshape((-1,1))
+        y = np.array(type_y_dict[type])
+        learner = LogisticRegression(max_iter=arg_dict['max_iter'], n_jobs=-1)
+        learner.fit(x, y)
+        model_file = abspath(expanduser(model_root + "affinity_" + cca_model_type.replace("Model", "") + \
+                     "_" + type + ".model"))
+        with open(model_file, 'wb') as pickle_file:
+            cPickle.dump(learner, pickle_file)
+        #endwith
     #endfor
-    f.close()
-#endwith
+#endif
+
+if arg_dict['eval']:
+    type_id_dict_eval, type_x_dict_eval, type_y_dict_eval = \
+        load_cca_data(eval_id_file, eval_scores_file, eval_label_file, eval_type_file)
+
+    # save the scores in a single file
+    log.info('Saving scores')
+    with open(scores_file, 'w') as f:
+        for type in type_x_dict_eval.keys():
+            x = np.array(type_x_dict_eval[type]).reshape((-1,1))
+            y = np.array(type_y_dict_eval[type])
+            model_file = abspath(expanduser(model_root + "affinity_" + cca_model_type.replace("Model", "") + \
+                         "_" + type + ".model"))
+            learner = cPickle.load(open(model_file, 'r'))
+            y_pred_probs = learner.predict_log_proba(np.array(x))
+            ids = type_id_dict_eval[type]
+            for i in range(0, len(y)):
+                line = list()
+                line.append(ids[i])
+                for j in range(len(y_pred_probs[i])):
+                    line.append(str(y_pred_probs[i][j]))
+                f.write(','.join(line) + '\n')
+                #endfor
+        #endfor
+        f.close()
+    #endwith
+#endif
+
+
+
+
+
