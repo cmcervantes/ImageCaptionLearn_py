@@ -1,4 +1,4 @@
-from os.path import abspath, expanduser
+from os.path import abspath, expanduser, isfile
 from sklearn.linear_model import LogisticRegression
 import numpy as np
 import cPickle
@@ -93,9 +93,10 @@ parser.add_argument("--eval", action='store_true', help="Evaluates using a saved
 parser.add_argument("--max_iter", type=int, default=100, help="train opt; Max SVM/logistic iterations")
 parser.add_argument("--data_root", type=str, default="~/data/tacl201708/", help="Data directory root (assumes scores, "
                                                                                 "feats, and cca subdirs)")
+parser.add_argument("--lex_types", type=str, choices=['30k', 'coco'], default='30k', help="Lexical types to use")
 parser.add_argument("--fit_prefix", type=str, default="flickr30k_dev", help="Prefix for fit files")
 parser.add_argument("--eval_prefix", type=str, default="flickr30k_dev", help="Prefix for evaluation files")
-parser.add_argument("--cca_model_type", type=str, default="30kModel", help="CCA model type (internal file name part)")
+parser.add_argument("--cca_model_type", type=str, default="30k", help="CCA model type (internal file name part)")
 parser.add_argument("--model_root", type=str, default="~/models/tacl201708/", help="Model directory root")
 
 args = parser.parse_args()
@@ -107,20 +108,22 @@ fit_prefix = arg_dict['fit_prefix']
 eval_prefix = arg_dict['eval_prefix']
 cca_model_type = arg_dict['cca_model_type']
 model_root = arg_dict['model_root']
+lexical_types = arg_dict['lex_types']
 
 # Set up all the files
 fit_id_file = abspath(expanduser(data_root + "cca/" + fit_prefix + "_id.txt"))
 fit_label_file = abspath(expanduser(data_root + "cca/" + fit_prefix + "_label.txt"))
-fit_type_file = abspath(expanduser(data_root + "cca/" + fit_prefix + "_type.csv"))
+fit_type_file = abspath(expanduser(data_root + "cca/" + fit_prefix + "_type_" + lexical_types + ".csv"))
 fit_scores_file = abspath(expanduser(data_root + "scores/" + fit_prefix +
                                      "_" + cca_model_type + "_ccaScores.csv"))
 eval_id_file = abspath(expanduser(data_root + "cca/" + eval_prefix + "_id.txt"))
 eval_label_file = abspath(expanduser(data_root + "cca/" + eval_prefix + "_label.txt"))
-eval_type_file = abspath(expanduser(data_root + "cca/" + eval_prefix + "_type.csv"))
+eval_type_file = abspath(expanduser(data_root + "cca/" + eval_prefix + "_type_" + lexical_types + ".csv"))
 eval_scores_file = abspath(expanduser(data_root + "scores/" + eval_prefix +
                                       "_" + cca_model_type + "_ccaScores.csv"))
 scores_file = abspath(expanduser(data_root + "scores/" + eval_prefix +
-                                 "_" + cca_model_type + "_affinity.scores"))
+                                 "_" + cca_model_type + "Model_" + lexical_types +
+                                 "Types_affinity.scores"))
 nonvis_file = abspath(expanduser(data_root + "feats/" + eval_prefix + "_nonvis.feats"))
 
 
@@ -148,13 +151,19 @@ if arg_dict['eval']:
         load_cca_data(eval_id_file, eval_scores_file, eval_label_file, eval_type_file)
 
     # save the scores in a single file
-    log.info('Saving scores')
+    log.info('Saving scores to ' + scores_file)
     with open(scores_file, 'w') as f:
         for type in type_x_dict_eval.keys():
             x = np.array(type_x_dict_eval[type]).reshape((-1,1))
             y = np.array(type_y_dict_eval[type])
             model_file = abspath(expanduser(model_root + "affinity_" + cca_model_type.replace("Model", "") + \
                          "_" + type + ".model"))
+            if not isfile(model_file):
+                model_file = abspath(expanduser(model_root + "affinity_" +
+                                                cca_model_type.replace("Model", "") +
+                                                "_other.model"))
+            #endif
+
             learner = cPickle.load(open(model_file, 'r'))
             y_pred_probs = learner.predict_log_proba(np.array(x))
             ids = type_id_dict_eval[type]

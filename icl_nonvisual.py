@@ -23,7 +23,7 @@ def train(model, balance, max_iter=None, max_depth=None,
     global log, train_file, meta_dict, model_file
 
     log.tic('info', "Loading training data")
-    x, y, ids = util.load_feats_data(train_file, meta_dict, ignored_feats, log)
+    x, y, ids = util.load_sparse_feats(train_file, meta_dict, ignored_feats, log)
 
     log.toc('info')
 
@@ -61,7 +61,7 @@ def evaluate(lemma_file=None, hyp_file=None, ignored_feats=set(), save_scores=Tr
     learner = cPickle.load(open(model_file, 'r'))
 
     log.info("Loading eval data")
-    x_eval, y_eval, ids_eval = util.load_feats_data(eval_file, meta_dict, ignored_feats, log)
+    x_eval, y_eval, ids_eval = util.load_sparse_feats(eval_file, meta_dict, ignored_feats, log)
 
     lemma_dict = dict()
     lemmas = set()
@@ -228,7 +228,7 @@ def nonvis_with_grounding(max_iter):
 
     ### Nonvis stuff ###
     log.info("Getting nonvis feats")
-    x_nonvis, y_nonvis, ids_nonvis = util.load_feats_data(eval_file, meta_dict, set(), log)
+    x_nonvis, y_nonvis, ids_nonvis = util.load_sparse_feats(eval_file, meta_dict, set(), log)
     label_dict_nonvis = dict()
     for i in range(0, len(ids_nonvis)):
         label_dict_nonvis[ids_nonvis[i]] = y_nonvis[i]
@@ -317,11 +317,7 @@ log = LogUtil(lvl='debug', delay=45)
 
 models = ['svm', 'logistic', 'decision_tree', 'random_forest']
 parser = ArgumentParser("ImageCaptionLearn_py: Nonvisual Mention Classifier")
-parser.add_argument("--model", choices=models, help="train opt; Model to train")
-parser.add_argument("--train", action='store_true', help="Trains and saves a model")
-parser.add_argument("--eval", action='store_true', help="Evaluates using a saved model")
-parser.add_argument("--ablation", type=str, help="Performs ablation, removing the specified " +
-                                                 "pipe-separated features (or 'all', for all features)")
+parser.add_argument("--model", choices=models, default='logistic', help="train opt; Model to train")
 parser.add_argument("--max_iter", type=int, default=100, help="train opt; Max SVM/logistic iterations")
 parser.add_argument("--max_tree_depth", type=int, default=None, help="train opt; Max decision tree depth")
 parser.add_argument("--balance", action='store_true',
@@ -332,80 +328,80 @@ parser.add_argument("--train_file", type=str, help="train feats file")
 parser.add_argument("--eval_file", type=str, help="eval feats file")
 parser.add_argument("--meta_file", type=str, help="meta feature file (typically associated with train file)")
 parser.add_argument("--model_file", type=str, help="saves model to file")
+parser.add_argument("--ablation_file", type=str, help="Performs ablation, using the groupings specified "
+                                                      "in the given ablation config file ")
 args = parser.parse_args()
 arg_dict = vars(args)
 util.dump_args(arg_dict, log)
-train_file = None
-if arg_dict['train_file'] is not None:
-    train_file = abspath(expanduser(arg_dict['train_file']))
-eval_file = None
-if arg_dict['eval_file'] is not None:
-    eval_file = abspath(expanduser(arg_dict['eval_file']))
-meta_file = abspath(expanduser(arg_dict['meta_file']))
-model_file = abspath(expanduser(arg_dict['model_file']))
-scores_file = eval_file.replace(".feats", ".scores")
 
-#train_file = "~/source/data/feats/nonvis_20170215.feats"
-#eval_file = "~/source/data/feats/nonvis_test_20170215.feats"
-#model_file = "models/nonvis.model"
-#meta_file = train_file.replace(".feats", "_meta.json")
+# Parse our file paths
+train_file = arg_dict['train_file']
+if train_file is not None:
+    train_file = abspath(expanduser(train_file))
+eval_file = arg_dict['eval_file']
+scores_file = None
+if eval_file is not None:
+    eval_file = abspath(expanduser(eval_file))
+    scores_file = eval_file.replace(".feats", ".scores")
+meta_file = arg_dict['meta_file']
+meta_dict = None
+if meta_file is not None:
+    meta_file = abspath(expanduser(meta_file))
+    meta_dict = json.load(open(meta_file, 'r'))
+model_file = arg_dict['model_file']
+if model_file is not None:
+    model_file = abspath(expanduser(model_file))
+ablation_file = arg_dict['ablation_file']
+ablation_groups = None
+if ablation_file is not None:
+    ablation_file = abspath(expanduser(ablation_file))
+    ablation_groups = util.load_ablation_file(ablation_file)
+
+# Parse the other args
+model_type = arg_dict['model']
+max_iter = arg_dict['max_iter']
+max_tree_depth = arg_dict['max_tree_depth']
+balance = arg_dict['balance']
+num_estimators = arg_dict['num_estimators']
+warm_start = arg_dict['warm']
+
+# Ensure we don't have an invalid collection of options
+if train_file is not None and (meta_file is None or model_file is None):
+    log.critical("Specified train_file without meta or model files; exiting")
+    parser.print_usage()
+    quit()
+if eval_file is not None and model_file is None:
+    log.critical("Specified eval_file without model_file; exiting")
+    parser.print_usage()
+    quit()
+if ablation_file is not None and (train_file is None or eval_file is None or meta_file is None):
+    log.critical("Specified ablation_file without train, eval, or meta file; exiting")
+    parser.print_usage()
+    quit()
+if train_file is None and eval_file is None:
+    log.critical("Did not specify train or eval file; exiting")
+    parser.print_usage()
+    quit()
 
 
+# If an ablation file was given priority goes to that operation
+if ablation_file is not None:
+    log.info("Running ablation testing")
 
-meta_dict = json.load(open(meta_file, 'r'))
+    log.info("---------- Baseline ----------")
+    train(model_type, balance, max_iter, max_tree_depth, num_estimators, warm_start)
+    evaluate(None, None, set(), False)
 
-log.info("Ignoring hypernym_bow")
-fixed_ignored = {"hypernym_bow"}
-
-#nonvis_with_grounding(arg_dict['max_iter'])
-#quit()
-
-#Train
-if arg_dict['train']:
-    train(arg_dict['model'], arg_dict['balance'], arg_dict['max_iter'],
-          arg_dict['max_tree_depth'], arg_dict['num_estimators'], arg_dict['warm'],
-          fixed_ignored)
-#Evaluate
-if arg_dict['eval']:
-    evaluate(None, None, fixed_ignored)
-    #lemma_file = abspath(expanduser('~/source/ImageCaptionLearn_py/ex_lemma_20161229.csv'))
-    #hyp_file = abspath(expanduser('~/source/ImageCaptionLearn_py/id_hyp_dict.json'))
-    #evaluate(lemma_file, hyp_file, fixed_ignored)
-#Ablate
-ablation_str = arg_dict['ablation']
-if ablation_str is not None:
-    ablation_feats = set()
-    if ablation_str == 'all':
-        for feat in meta_dict.keys():
-            if feat != "max_idx":
-                ablation_feats.add(feat)
-    else:
-        for feat in ablation_str.split("|"):
-            if feat in meta_dict.keys():
-                ablation_feats.add(feat)
-            else:
-                log.error(None, "Specified unknown ablation feature '%s'; ignoring", feat)
-    #endif
-
-    if ablation_str == 'all':
-        log.info('Baseline (ignoring no features)')
-        train(arg_dict['model'], arg_dict['balance'], arg_dict['max_iter'],
-              arg_dict['max_tree_depth'], arg_dict['num_estimators'], arg_dict['warm'])
-        lemma_file = abspath(expanduser('~/source/ImageCaptionLearn_py/ex_lemma_20161229.csv'))
-        hyp_file = abspath(expanduser('~/source/ImageCaptionLearn_py/id_hyp_dict.json'))
-        evaluate(lemma_file, hyp_file, set(), False)
-    #endif
-
-    log.info("Running ablation over the following features")
-    print "|".join(ablation_feats)
-
-    for feat in ablation_feats:
-        log.info(None, "---- Removing feature %s ----", feat)
-        ignored = set(); ignored.add(feat)
-        train(arg_dict['model'], arg_dict['balance'], arg_dict['max_iter'],
-              arg_dict['max_tree_depth'], arg_dict['num_estimators'], arg_dict['warm'], ignored)
-        lemma_file = abspath(expanduser('~/source/ImageCaptionLearn_py/ex_lemma_20161229.csv'))
-        hyp_file = abspath(expanduser('~/source/ImageCaptionLearn_py/id_hyp_dict.json'))
-        evaluate(lemma_file, hyp_file, ignored, False)
+    for ablation_feats in ablation_groups:
+        ablation_feats_str = "|".join(ablation_feats)
+        log.info(None, "---------- Removing %s ----------", ablation_feats_str)
+        train(model_type, balance, max_iter, max_tree_depth, num_estimators, warm_start, ablation_feats)
+        evaluate(None, None, ablation_feats, False)
     #endfor
+else:
+    if train_file is not None:
+        train(model_type, balance, max_iter, max_tree_depth, num_estimators, warm_start)
+    if eval_file is not None:
+        evaluate(None, None, set(), True)
 #endif
+

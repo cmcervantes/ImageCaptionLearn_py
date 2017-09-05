@@ -15,7 +15,7 @@ def train(solver, max_iter, balance, norm, warm_start, multiclass_mode, ignored_
     global log, meta_dict, train_file, model_file
 
     log.tic('info', "Loading training data")
-    x, y, ids = util.load_feats_data(train_file, meta_dict, ignored_feats, log)
+    x, y, ids = util.load_sparse_feats(train_file, meta_dict, ignored_feats, log)
     if norm is not None:
         normalize(x, norm=norm, copy=False)
     log.toc('info')
@@ -47,8 +47,8 @@ def save_scores(ignored_feats=set()):
 
     log.info("Loading eval data")
     x_eval, y_eval, ids_eval = \
-        util.load_feats_data(eval_file, meta_dict,
-                             ignored_feats, log)
+        util.load_sparse_feats(eval_file, meta_dict,
+                               ignored_feats, log)
 
     log.info("Predicting scores")
     y_pred_probs = learner.predict_log_proba(x_eval)
@@ -76,8 +76,8 @@ def evaluate(norm, ignored_feats=set()):
 
     log.info("Loading eval data")
     x_eval, y_eval, ids_eval = \
-        util.load_feats_data(eval_file, meta_dict,
-                             ignored_feats, log)
+        util.load_sparse_feats(eval_file, meta_dict,
+                               ignored_feats, log)
     if norm is not None:
         normalize(x_eval, norm=norm, copy=False)
     #endif
@@ -184,8 +184,8 @@ def tune():
     global train_file, eval_file, meta_dict
 
     log.tic('info', 'Loading data')
-    x_train, y_train, ids_train = util.load_feats_data(train_file, meta_dict['max_idx'], log)
-    x_eval, y_eval, ids_eval = util.load_feats_data(eval_file, meta_dict['max_idx'], log)
+    x_train, y_train, ids_train = util.load_sparse_feats(train_file, meta_dict['max_idx'], log)
+    x_eval, y_eval, ids_eval = util.load_sparse_feats(eval_file, meta_dict['max_idx'], log)
     ids_nonvis_gold = load_nonvis_ids()
     log.toc('info')
 
@@ -252,10 +252,6 @@ solvers = ['lbfgs', 'newton-cg', 'sag']
 multiclass_modes = ['multinomial', 'ovr']
 parser = ArgumentParser("ImageCaptionLearn_py: Pairwise Relation Classifier")
 parser.add_argument("--norm", type=str, help="preproc opt; Specify data normalization")
-parser.add_argument("--train", action='store_true', help="Trains and saves a model")
-parser.add_argument("--eval", action='store_true', help="Evaluates using a saved model")
-parser.add_argument("--ablation", type=str, help="Performs ablation, removing the specified " +
-                    "pipe-separated features (or 'all', for all features)")
 parser.add_argument("--solver", choices=solvers, default=solvers[0],
                     help="train opt; Multiclass solver to use")
 parser.add_argument("--warm", action='store_true', help="train opt; Uses previous solution as init")
@@ -269,74 +265,90 @@ parser.add_argument("--eval_file", type=str, help="eval feats file")
 parser.add_argument("--meta_file", type=str, help="meta feature file (typically associated with train file)")
 parser.add_argument("--model_file", type=str, help="saves model to file")
 parser.add_argument("--nonvis_file", type=str, help="Retrieves nonvis labels from file; excludes from eval")
+parser.add_argument("--ablation_file", type=str, help="Performs ablation, using the groupings specified "
+                                                      "in the given ablation config file ")
 args = parser.parse_args()
 arg_dict = vars(args)
 util.dump_args(arg_dict, log)
-train_file = None
-if arg_dict['train_file'] is not None:
-    train_file = abspath(expanduser(arg_dict['train_file']))
-eval_file = None
-if arg_dict['eval_file'] is not None:
-    eval_file = abspath(expanduser(arg_dict['eval_file']))
-meta_file = abspath(expanduser(arg_dict['meta_file']))
-model_file = abspath(expanduser(arg_dict['model_file']))
-scores_file = eval_file.replace(".feats", ".scores")
-nonvis_file = None
+
+
+
+# Parse our file paths
+train_file = arg_dict['train_file']
+if train_file is not None:
+    train_file = abspath(expanduser(train_file))
+eval_file = arg_dict['eval_file']
+scores_file = None
+if eval_file is not None:
+    eval_file = abspath(expanduser(eval_file))
+    scores_file = eval_file.replace(".feats", ".scores")
+meta_file = arg_dict['meta_file']
+meta_dict = None
+if meta_file is not None:
+    meta_file = abspath(expanduser(meta_file))
+    meta_dict = json.load(open(meta_file, 'r'))
+model_file = arg_dict['model_file']
+if model_file is not None:
+    model_file = abspath(expanduser(model_file))
+ablation_file = arg_dict['ablation_file']
+ablation_groups = None
+if ablation_file is not None:
+    ablation_file = abspath(expanduser(ablation_file))
+    ablation_groups = util.load_ablation_file(ablation_file)
+nonvis_file = arg_dict['nonvis_file']
 meta_nonvis_file = None
-if arg_dict['nonvis_file'] is not None:
-    nonvis_file = abspath(expanduser(arg_dict['nonvis_file']))
+if nonvis_file is not None:
+    nonvis_file = abspath(expanduser(nonvis_file))
     meta_nonvis_file = nonvis_file.replace(".feats", "_meta.json")
 #endif
 
-# load the meta dict
-meta_dict = json.load(open(meta_file, 'r'))
 
-log.info("Ignoring hypernym_bow")
-fixed_ignored = {"hypernym_bow"}
+# Parse the other args
+max_iter = arg_dict['max_iter']
+balance = arg_dict['balance']
+warm_start = arg_dict['warm']
+solver_type = arg_dict['solver']
+mcc_mode = arg_dict['mcc_mode']
+normalize_data = arg_dict['norm']
 
-# Train
-if arg_dict['train']:
-    train(arg_dict['solver'], arg_dict['max_iter'],
-          arg_dict['balance'], arg_dict['norm'],
-          arg_dict['warm'], arg_dict['mcc_mode'],
-          fixed_ignored)
-    save_scores(fixed_ignored)
-# Evaluate
-if arg_dict['eval']:
-    evaluate(arg_dict['norm'], fixed_ignored)
-    save_scores(fixed_ignored)
+# Ensure we don't have an invalid collection of options
+if train_file is not None and (meta_file is None or model_file is None):
+    log.critical("Specified train_file without meta or model files; exiting")
+    parser.print_usage()
+    quit()
+if eval_file is not None and model_file is None:
+    log.critical("Specified eval_file without model_file; exiting")
+    parser.print_usage()
+    quit()
+if ablation_file is not None and (train_file is None or eval_file is None or meta_file is None):
+    log.critical("Specified ablation_file without train, eval, or meta file; exiting")
+    parser.print_usage()
+    quit()
+if train_file is None and eval_file is None:
+    log.critical("Did not specify train or eval file; exiting")
+    parser.print_usage()
+    quit()
 
-#Ablate
-ablation_str = arg_dict['ablation']
-if ablation_str is not None:
-    ablation_feats = set()
-    if ablation_str == 'all':
-        for feat in meta_dict.keys():
-            if feat != "max_idx":
-                ablation_feats.add(feat)
-    else:
-        for feat in ablation_str.split("|"):
-            if feat in meta_dict.keys():
-                ablation_feats.add(feat)
-            else:
-                log.error(None, "Specified unknown ablation feature '%s'; ignoring", feat)
-    #endif
 
-    if ablation_str == 'all':
-        log.info('Baseline (no ignored features)')
-        train(arg_dict['solver'], arg_dict['max_iter'], arg_dict['balance'],
-              arg_dict['norm'], arg_dict['warm'], arg_dict['mcc_mode'])
-        evaluate(arg_dict['norm'])
-    #endif
+# If an ablation file was given priority goes to that operation
+if ablation_file is not None:
+    log.info("Running ablation testing")
 
-    log.info("Running ablation over the following features")
-    print "|".join(ablation_feats)
+    log.info("---------- Baseline ----------")
+    train(solver_type, max_iter, balance, normalize_data, warm_start, mcc_mode, set())
+    evaluate(normalize_data, set())
 
-    for feat in ablation_feats:
-        log.info(None, "---- Removing feature %s ----", feat)
-        ignored = set(); ignored.add(feat)
-        train(arg_dict['solver'], arg_dict['max_iter'], arg_dict['balance'],
-              arg_dict['norm'], arg_dict['warm'], arg_dict['mcc_mode'], ignored)
-        evaluate(arg_dict['norm'], ignored)
+    for ablation_feats in ablation_groups:
+        ablation_feats_str = "|".join(ablation_feats)
+        log.info(None, "---------- Removing %s ----------", ablation_feats_str)
+        train(solver_type, max_iter, balance, normalize_data, warm_start,
+              mcc_mode, ablation_feats)
+        evaluate(normalize_data, ablation_feats)
     #endfor
+else:
+    if train_file is not None:
+        train(solver_type, max_iter, balance, normalize_data, warm_start, mcc_mode, set())
+    if eval_file is not None:
+        evaluate(normalize_data, set())
+        save_scores(set())
 #endif
