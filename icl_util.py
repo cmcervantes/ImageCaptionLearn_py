@@ -5,7 +5,7 @@ from os.path import abspath, expanduser, exists
 __author__ = "ccervantes"
 
 
-def load_sparse_feats(filename, meta_dict=None, ignored_feats=None):
+def load_very_sparse_feats(filename, meta_dict=None, ignored_feats=None):
     """
     Loads the given sparse feature data into a SciPy sparse matrix, returning
     a (X, Y, IDs) tuple, which are (sparse_matrix, numpy_array, list),
@@ -21,7 +21,6 @@ def load_sparse_feats(filename, meta_dict=None, ignored_feats=None):
     :return:                (X, Y, IDs) tuple for data, labels, and unique
                             sample IDs, respectively
     """
-
     ids = list()
     y_vals = list()
     x_cols = list()
@@ -33,13 +32,15 @@ def load_sparse_feats(filename, meta_dict=None, ignored_feats=None):
     # greater than a key, we subtract the
     # value from it
     ignored_adjust_dict = dict()
-    for feat in ignored_feats:
-        val = meta_dict[feat]
-        if isinstance(val, list):
-            ignored_adjust_dict[val[1]] = val[1] - val[0]
-        else:
-            ignored_adjust_dict[val] = 1
-    #endfor
+    if ignored_feats is not None:
+        for feat in ignored_feats:
+            val = meta_dict[feat]
+            if isinstance(val, list):
+                ignored_adjust_dict[val[1]] = val[1] - val[0]
+            else:
+                ignored_adjust_dict[val] = 1
+        #endfor
+    #endif
 
     row_count = 0
     n_rows = 0
@@ -70,7 +71,8 @@ def load_sparse_feats(filename, meta_dict=None, ignored_feats=None):
                     adj_idx = idx
 
                     # If this is one of the ignored features, drop it
-                    if is_ignored_idx(idx, meta_dict, ignored_feats):
+                    if ignored_feats is not None and \
+                       is_ignored_idx(idx, meta_dict, ignored_feats):
                         continue
 
                     # Adjust the index, to account for the missing
@@ -91,19 +93,121 @@ def load_sparse_feats(filename, meta_dict=None, ignored_feats=None):
 
     # get the number of feats, less the one we've ignored
     num_feats = meta_dict['max_idx'] + 1
-    for feat in ignored_feats:
-        val = meta_dict[feat]
-        index_count = 1
-        if isinstance(val, list):
-            index_count = val[1] - val[0]
-        num_feats -= index_count
-    #endfor
+    if ignored_feats is not None:
+        for feat in ignored_feats:
+            val = meta_dict[feat]
+            index_count = 1
+            if isinstance(val, list):
+                index_count = val[1] - val[0]
+            num_feats -= index_count
+        #endfor
+    #endif
 
     x = sparse.csc_matrix((np.array(x_vals), (x_rows, x_cols)),
                           shape=(n_rows, num_feats))
     y = np.array(y_vals)
     return x, y, ids
 #enddef
+
+
+def load_sparse_feats(filename, meta_dict, ignored_feats=None):
+    """
+    Loads the given sparse feature data into a sparse numpy matrix,
+    returning (x, y, ids) tuple; this should be more efficient
+    for moderately sparse data, but for very sparse data, it is
+    unclear whether load_very_sparse_feats is more efficient
+    NOTE: labels Y are a list of actual label values (contrast with
+          load_dense_feats, which returns a matrix of one-hots)
+
+    :param filename:        Sparse feature file, in the liblinear format
+                            <label> <index_0>:<value_0> ... <index_n>:<value_n> # <ID>
+    :param meta_dict:       Dictionary mapping human-readable names to feature
+                            indices (used in conjunction with ignored_feats)
+    :param ignored_feats:   List of human-readable feature names to ignore
+    :return:                (X, Y, IDs) tuple for data, labels, and unique
+                            sample IDs, respectively
+    """
+    # Store a mapping of an index and an
+    # adjustment; when we encounter an index
+    # greater than a key, we subtract the
+    # value from it
+    ignored_adjust_dict = dict()
+    if ignored_feats is not None:
+        for feat in ignored_feats:
+            val = meta_dict[feat]
+            if isinstance(val, list):
+                ignored_adjust_dict[val[1]] = val[1] - val[0]
+            else:
+                ignored_adjust_dict[val] = 1
+        #endfor
+    #endif
+
+    # get the number of feats, less the one we've ignored
+    n_feats = meta_dict['max_idx'] + 1
+    if ignored_feats is not None:
+        for feat in ignored_feats:
+            val = meta_dict[feat]
+            index_count = 1
+            if isinstance(val, list):
+                index_count = val[1] - val[0]
+            n_feats -= index_count
+        #endfor
+    #endif
+
+    n_rows = 0
+    with open(filename, 'r') as f:
+        # Read the total number of lines
+        for n_rows, l in enumerate(f):
+            pass
+        n_rows += 1
+
+        y = np.zeros(n_rows)
+        x = np.zeros([n_rows, n_feats])
+        ids = list()
+
+        # Reset the file and read for content
+        f.seek(0)
+        i = 0
+        for line in f:
+            # get the ID from the comment string
+            id_split = line.split(" # ")
+            ids.append(id_split[1].strip())
+
+            # split the non-comments by spaces
+            vector_split = id_split[0].strip().split(" ")
+
+            # the label is the first element
+            y[i] = int(float(vector_split[0].strip()))
+
+            # iterate through the vector
+            for i in range(1, len(vector_split)):
+                kv_pair = vector_split[i].split(":")
+                if float(kv_pair[1]) > 0.0:
+                    idx = int(kv_pair[0].strip())
+                    adj_idx = idx
+
+                    # If this is one of the ignored features, drop it
+                    if ignored_feats is not None and \
+                       is_ignored_idx(idx, meta_dict, ignored_feats):
+                        continue
+
+                    # Adjust the index, to account for the missing
+                    # indices
+                    for j in ignored_adjust_dict.keys():
+                        if j < idx:
+                            adj_idx -= ignored_adjust_dict[j]
+                    #endfor
+
+                    x[i][adj_idx] = float(kv_pair[1].strip())
+                #endif
+            #endfor
+            i += 1
+        #endfor
+        f.close()
+    #endwith
+
+    return x, y, ids
+#endif
 
 
 def load_dense_feats(filename):
@@ -186,11 +290,16 @@ def load_ablation_file(filename):
 #enddef
 
 
-"""
-Whether this idx is one of our ignored features (checks
-the ranges and values in the meta_dict)
-"""
 def is_ignored_idx(idx, meta_dict, ignored_feats):
+    """
+    Returns whether the given idx is one of the
+    ignored features (it checks the ranges and
+    values in the meta_dict)
+    :param idx:
+    :param meta_dict:
+    :param ignored_feats:
+    :return:
+    """
     is_ignored = False
     for feat in ignored_feats:
         val = meta_dict[feat]

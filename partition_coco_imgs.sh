@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 img_id_file="coco_sub_train_imgs.txt"
 while IFS= read -r img_id
 do
