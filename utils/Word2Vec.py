@@ -4,7 +4,7 @@ import numpy as np
 __author__ = "ccervantes"
 
 
-class Word2VecUtil:
+class Word2Vec:
     """
     Word2VecUtil serves as a wrapper for
     word2vec loading and retrieval

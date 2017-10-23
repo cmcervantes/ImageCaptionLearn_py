@@ -1,14 +1,15 @@
-import tensorflow as tf
-import numpy as np
 import math
-import random
 import os
 from argparse import ArgumentParser
-from os.path import abspath, expanduser
 
-from LogUtil import LogUtil
-import icl_util as util
-import nn_util
+import numpy as np
+import tensorflow as tf
+
+from nn_utils import core as nn_util
+from nn_utils import data as nn_data
+from nn_utils import eval as nn_eval
+from utils import core as util
+from utils.Logger import Logger
 
 ___author___ = "ccervantes"
 
@@ -19,10 +20,10 @@ RELATION_TYPES = ['intra', 'cross']
 rel_type = None
 pair_enc_scheme = None
 data_norm = False
-use_engr_feats = False
+embedding_type = None
 
 # Set up the global logger
-log = LogUtil('debug', 180)
+log = Logger('debug', 180)
 
 
 def load_batch_first_avg_last(mention_pairs, data_dict):
@@ -38,7 +39,7 @@ def load_batch_first_avg_last(mention_pairs, data_dict):
     :param data_dict: Dictionary of all data dictionaries (for sentences, etc)
     :return: dictionary of batch tensors with aforementioned keys
     """
-    global N_EMBEDDING_FEATS, CLASSES, RELATION_TYPES, rel_type, use_engr_feats
+    global N_EMBEDDING_FEATS, CLASSES, RELATION_TYPES, rel_type
     batch_tensors = dict()
 
     # We're either looking at batch_size sequences or 2*batch_size sequences,
@@ -90,8 +91,7 @@ def load_batch_first_avg_last(mention_pairs, data_dict):
     batch_tensors['sent_j_bw_indices'] = np.zeros([batch_size, 2])
     batch_tensors['norm_i'] = np.zeros([batch_size, 1, 2 * data_dict['max_seq_len']])
     batch_tensors['norm_j'] = np.zeros([batch_size, 1, 2 * data_dict['max_seq_len']])
-    if use_engr_feats:
-        batch_tensors['pair_feats'] = np.zeros([batch_size, data_dict['max_feat_idx']+1])
+    batch_tensors['pair_feats'] = np.zeros([batch_size, data_dict['max_feat_idx']+1])
     batch_tensors['labels'] = np.zeros([batch_size, len(CLASSES)])
     for i in range(0, batch_size):
         pair_id = mention_pairs[i]
@@ -133,9 +133,8 @@ def load_batch_first_avg_last(mention_pairs, data_dict):
 
         # Feature arrays, if specified; we don't have to
         # add anything to the tensors, because they're already 0s
-        if use_engr_feats:
-            if pair_id in data_dict['mention_pair_feats']:
-                batch_tensors['pair_feats'][i] = data_dict['mention_pair_feats'][pair_id]
+        if pair_id in data_dict['mention_pair_feats']:
+            batch_tensors['pair_feats'][i] = data_dict['mention_pair_feats'][pair_id]
     #endfor
     return batch_tensors
 #enddef
@@ -154,7 +153,7 @@ def load_batch_first_last_sentence(mention_pairs, data_dict):
     :param data_dict: Dictionary of all data dictionaries (for sentences, etc)
     :return: dictionary of batch tensors with aforementioned keys
     """
-    global N_EMBEDDING_FEATS, CLASSES, RELATION_TYPES, rel_type, use_engr_feats
+    global N_EMBEDDING_FEATS, CLASSES, RELATION_TYPES, rel_type
     batch_tensors = dict()
 
     # We're either looking at batch_size sequences or 2*batch_size sequences,
@@ -207,10 +206,7 @@ def load_batch_first_last_sentence(mention_pairs, data_dict):
     if rel_type == RELATION_TYPES[1]:
         batch_tensors['sent_j_first_indices'] = np.zeros([batch_size, 3])
         batch_tensors['sent_j_last_indices'] = np.zeros([batch_size, 3])
-
-    # If we're using engineered features, we need to account for that tensor
-    if use_engr_feats:
-        batch_tensors['pair_feats'] = np.zeros([batch_size, data_dict['max_feat_idx']+1])
+    batch_tensors['pair_feats'] = np.zeros([batch_size, data_dict['max_feat_idx']+1])
 
     # Iterate through batch_size mention pairs, storing the appropriate
     # vectors into the tensors
@@ -253,70 +249,10 @@ def load_batch_first_last_sentence(mention_pairs, data_dict):
 
         # Feature arrays, if specified; we don't have to
         # add anything to the tensors, because they're already 0s
-        if use_engr_feats:
-            if pair_id in data_dict['mention_pair_feats']:
-                batch_tensors['pair_feats'][i] = data_dict['mention_pair_feats'][pair_id]
+        if pair_id in data_dict['mention_pair_feats']:
+            batch_tensors['pair_feats'][i] = data_dict['mention_pair_feats'][pair_id]
     #endfor
     return batch_tensors
-#enddef
-
-
-def setup_bidirectional_lstm(n_hidden, n_parallel):
-    """
-    Sets up the tensorflow placeholders, adding relevant variables
-    to the graph's collections
-
-    :param n_hidden:   Size of the hidden layer in the LSTM cells
-    :param n_parallel: Number of parallel tasks the RNN may run
-    """
-    global data_norm, N_EMBEDDING_FEATS
-    scope_name = tf.get_variable_scope().name + "/"
-
-    # input
-    x = tf.placeholder(tf.float32, [None, None, N_EMBEDDING_FEATS])
-    if data_norm:
-        x = tf.nn.l2_normalize(x, dim=2)
-    tf.add_to_collection(scope_name + 'x', x)
-
-    # sequence lengths
-    seq_lengths = tf.placeholder(tf.int32, [None])
-    tf.add_to_collection(scope_name + 'seq_lengths', seq_lengths)
-
-    # dropout percentage
-    input_keep_prob = tf.placeholder(tf.float32)
-    output_keep_prob = tf.placeholder(tf.float32)
-    tf.add_to_collection(scope_name + 'input_keep_prob', input_keep_prob)
-    tf.add_to_collection(scope_name + 'output_keep_prob', output_keep_prob)
-
-    # set up the cells
-    lstm_cell = {}
-    for direction in ["fw", "bw"]:
-        with tf.variable_scope(direction):
-            lstm_cell[direction] = \
-                tf.nn.rnn_cell.BasicLSTMCell(n_hidden, state_is_tuple=True)
-            lstm_cell[direction] = \
-                tf.nn.rnn_cell.DropoutWrapper(lstm_cell[direction], input_keep_prob=input_keep_prob,
-                                              output_keep_prob=output_keep_prob)
-            #endwith
-    #endfor
-
-    # Define the bidirectional dynamic-sized RNN
-    #   inputs: [batch_size, max_sequence_length, num_features]; the inputs
-    #   sequence length: [batch_size]; the sequence lengths
-    #   parallel_iterations: (Default: 32); number of iterations to run in parallel;
-    #                        values >> 1 run faster but take more memory
-    #   swap_memory: Whether to swap from CPU to GPU (use if model can't fit on the GPU)
-    #   time_major: Whether the shape of the input tensors' first dimension is
-    #               time (sequence) or -- as is typical -- batch (example)
-    outputs, states = \
-        tf.nn.bidirectional_dynamic_rnn(lstm_cell["fw"],
-                                        lstm_cell["bw"],
-                                        x, dtype=tf.float32,
-                                        parallel_iterations=n_parallel,
-                                        sequence_length=seq_lengths,
-                                        time_major=False)
-    tf.add_to_collection(scope_name + 'outputs_fw', outputs[0])
-    tf.add_to_collection(scope_name + 'outputs_bw', outputs[1])
 #enddef
 
 
@@ -402,9 +338,8 @@ def setup_batch_input_first_avg_last(batch_size, lstm_outputs):
     # d) Collect these tensors into a list, including the engineered feats
     #    if specified
     tensor_list = [outputs_first_i, avg_i, outputs_last_i,
-                   outputs_first_j, avg_j, outputs_last_j]
-    if use_engr_feats:
-        tensor_list.append(ij_feats)
+                   outputs_first_j, avg_j, outputs_last_j,
+                   ij_feats]
 
     # d) Finally, concatenate all these together along the final dimension
     batch_input = tf.concat(tensor_list, 1)
@@ -475,8 +410,7 @@ def setup_batch_input_first_last_sentence(batch_size, lstm_outputs):
         outputs_sent_j_last = tf.gather_nd(lstm_outputs, sent_j_last_indices)
         tensor_list.append(outputs_sent_j_first)
         tensor_list.append(outputs_sent_j_last)
-    if use_engr_feats:
-        tensor_list.append(ij_feats)
+    tensor_list.append(ij_feats)
 
     batch_input = tf.concat(tensor_list, 1)
     tf.add_to_collection('batch_input', batch_input)
@@ -484,8 +418,8 @@ def setup_batch_input_first_last_sentence(batch_size, lstm_outputs):
 
 
 def setup_relation(batch_size, lstm_hidden_width, start_hidden_width,
-                   hidden_depth, weighted_classes, n_parallel,
-                   lrn_rate, clip_norm, adam_epsilon, activation,
+                   hidden_depth, weighted_classes, lrn_rate,
+                   clip_norm, adam_epsilon, activation,
                    n_engr_feats=None):
     """
     Sets up the relation classifier network, which passes sentences to
@@ -498,7 +432,6 @@ def setup_relation(batch_size, lstm_hidden_width, start_hidden_width,
     :param hidden_depth: Number of hidden layers after the lstm
     :param weighted_classes: Whether to weight the examples by their class inversely
                     with the frequency of that class
-    :param n_parallel: Number of parallel jobs the LSTM may perform at once
     :param lrn_rate: Learning rate of the optimizer
     :param clip_norm: Global gradient clipping norm
     :param adam_epsilon: Adam optimizer epsilon value
@@ -514,7 +447,7 @@ def setup_relation(batch_size, lstm_hidden_width, start_hidden_width,
 
     # Set up the bidirectional LSTM
     with tf.variable_scope('bidirectional_lstm'):
-        setup_bidirectional_lstm(lstm_hidden_width, n_parallel)
+        nn_util.setup_bidirectional_lstm(lstm_hidden_width, data_norm)
 
     # Get the outputs, which are a (fw,bw) tuple of
     # [batch_size, seq_length, n_hidden_lstm matrices
@@ -534,8 +467,7 @@ def setup_relation(batch_size, lstm_hidden_width, start_hidden_width,
             hidden_input_width = 8 * lstm_hidden_width
         setup_batch_input_first_last_sentence(batch_size, lstm_outputs)
     #endif
-    if use_engr_feats:
-        hidden_input_width += n_engr_feats
+    hidden_input_width += n_engr_feats
     batch_input = tf.get_collection('batch_input')[0]
 
     # dropout percentage
@@ -566,7 +498,7 @@ def setup_relation(batch_size, lstm_hidden_width, start_hidden_width,
         #endwith
     #endfor
     with tf.variable_scope("softmax"):
-        weights = nn_util.get_weights([n_hidden_widths[hidden_depth-1], len(CLASSES)])
+        weights = nn_util.get_weights([n_hidden_widths[hidden_depth - 1], len(CLASSES)])
         biases = nn_util.get_biases([1, len(CLASSES)])
         # Because our label distribution is so skewed, we have to
         # add a constant epsilon to all of the values to prevent
@@ -612,22 +544,8 @@ def setup_relation(batch_size, lstm_hidden_width, start_hidden_width,
     loss = tf.reduce_sum(cross_entropy)
     tf.add_to_collection('loss', loss)
 
-    # Adam optimizer sets a variable learning rate for every weight, along
-    # with rolling averages; It uses beta1 (def: 0.9), beta2 (def: 0.99),
-    # and epsilon (def: 1E-08) to get exponential decay
-    optimiz = tf.train.AdamOptimizer(learning_rate=lrn_rate,
-                                     epsilon=adam_epsilon)
-    if clip_norm is None:
-        train_op = optimiz.minimize(loss)
-    else:
-        # We want to perform gradient clipping (by the global norm, to start)
-        # which means we need to unstack the steps in minimize and clip
-        # the gradients between them
-        gradients, variables = zip(*optimiz.compute_gradients(loss))
-        gradients, _ = tf.clip_by_global_norm(gradients, clip_norm)
-        train_op = optimiz.apply_gradients(zip(gradients, variables))
-    #endif
-    tf.add_to_collection('train_op', train_op)
+    # Add the training operation
+    nn_util.add_train_op(loss, lrn_rate, adam_epsilon, clip_norm)
 
     # Evaluate model
     pred = tf.argmax(predicted_proba, 1)
@@ -701,8 +619,7 @@ def run_op_first_avg_last(tf_session, tf_op, batch_tensors,
                  dropout: other_dropout}
     if include_labels:
         feed_dict[y] = batch_tensors['labels']
-    if use_engr_feats:
-        feed_dict[ij_feats] = batch_tensors['pair_feats']
+    feed_dict[ij_feats] = batch_tensors['pair_feats']
     return tf_session.run(tf_op, feed_dict=feed_dict)
 #endif
 
@@ -758,8 +675,7 @@ def run_op_first_last_sentence(tf_session, tf_op, batch_tensors,
         feed_dict[sent_j_last_indices] = batch_tensors['sent_j_last_indices']
     if include_labels:
         feed_dict[y] = batch_tensors['labels']
-    if use_engr_feats:
-        feed_dict[ij_feats] = batch_tensors['pair_feats']
+    feed_dict[ij_feats] = batch_tensors['pair_feats']
     return tf_session.run(tf_op, feed_dict=feed_dict)
 #endif
 
@@ -767,9 +683,11 @@ def run_op_first_last_sentence(tf_session, tf_op, batch_tensors,
 def train(sentence_file, mention_idx_file, feature_file,
           feature_meta_file, epochs, batch_size, lstm_hidden_width,
           start_hidden_width, hidden_depth, weighted_classes,
-          input_dropout, other_dropout, n_parallel, lrn_rate,
+          input_dropout, other_dropout, lrn_rate,
           adam_epsilon, clip_norm, activation, model_file=None,
-          eval_sentence_file=None, eval_mention_idx_file=None):
+          eval_sentence_file=None, eval_mention_idx_file=None,
+          eval_feature_file=None, eval_feature_meta_file=None,
+          eval_label_file=None, early_stopping=False):
     """
     Trains a relation model
 
@@ -788,7 +706,6 @@ def train(sentence_file, mention_idx_file, feature_file,
                              that class
     :param input_dropout: Probability to keep for lstm inputs
     :param other_dropout: Probability to keep for all other nodes
-    :param n_parallel: Number of parallel jobs the LSTM may perform at once
     :param lrn_rate: Learning rate of the optimizer
     :param clip_norm: Global gradient clipping norm
     :param adam_epsilon: Adam optimizer epsilon value
@@ -798,26 +715,40 @@ def train(sentence_file, mention_idx_file, feature_file,
                                should be evaluated
     :param eval_mention_idx_file: Mention index file against which
                                   the model should be evaluated
+    :param eval_label_file: Relation label file for eval data
     :return:
     """
-    global pair_enc_scheme
+    global pair_enc_scheme, embedding_type
 
     log.info("Loading data from " + sentence_file + " and " + mention_idx_file)
-    if use_engr_feats:
-        data_dict = nn_util.load_mention_pair_data(sentence_file, mention_idx_file,
-                                                   feature_file, feature_meta_file)
-    else:
-        data_dict = nn_util.load_mention_pair_data(sentence_file, mention_idx_file)
-    #endif
+    data_dict = nn_data.load_mention_pair_data(mention_idx_file,
+                                               feature_file, feature_meta_file)
+    sentence_dict = nn_data.load_sentences(sentence_file, embedding_type)
+    for key in sentence_dict.keys():
+        data_dict[key] = sentence_dict[key]
+
+    log.info("Loading data from " + eval_sentence_file + " and " + eval_mention_idx_file)
+    eval_data_dict = nn_data.load_mention_pair_data(eval_mention_idx_file,
+                                                    eval_feature_file, eval_feature_meta_file)
+    eval_sentence_dict = nn_data.load_sentences(eval_sentence_file, embedding_type)
+    for key in eval_sentence_dict.keys():
+        eval_data_dict[key] = eval_sentence_dict[key]
+
     mention_pairs = data_dict['mention_pair_indices'].keys()
     n_pairs = len(mention_pairs)
 
+    # Load the gold labels from the label file once, and we can just reuse them every epoch
+    gold_label_dict = nn_data.load_relation_labels(eval_label_file)
+
+    # We want to keep track of the best coref and subset scores, along
+    # with the epoch that they originated from
+    best_coref_subset_avg = -1
+    best_coref_subset_epoch = -1
+
     log.info("Setting up network architecture")
-    n_engr_feats = None
-    if use_engr_feats:
-        n_engr_feats = data_dict['max_feat_idx'] + 1
+    n_engr_feats = data_dict['max_feat_idx'] + 1
     setup_relation(batch_size, lstm_hidden_width, start_hidden_width,
-                   hidden_depth, weighted_classes, n_parallel, lrn_rate,
+                   hidden_depth, weighted_classes, lrn_rate,
                    clip_norm, adam_epsilon, activation, n_engr_feats)
 
     # Get our model-independent tensorflow operations
@@ -892,13 +823,35 @@ def train(sentence_file, mention_idx_file, feature_file,
                      100.0 * sum(accuracies) / float(len(accuracies)))
             saver.save(sess, model_file)
             if eval_sentence_file is not None and eval_mention_idx_file is not None:
-                if feature_file is not None and feature_meta_file is not None:
-                    predict(sess, eval_sentence_file,
-                            eval_mention_idx_file, feature_file.replace('train', 'dev'),
-                            feature_meta_file.replace('train', 'dev'), batch_size)
-                else:
-                    predict(sess, eval_sentence_file, eval_mention_idx_file, None, None,
-                            batch_size)
+                pred_scores = get_pred_scores(sess, batch_size, eval_data_dict)
+
+                # If we do an argmax on the scores, we get the predicted labels
+                eval_mention_pairs = pred_scores.keys()
+                pred_labels = list()
+                for pair in eval_mention_pairs:
+                    pred_labels.append(np.argmax(pred_scores[pair]))
+
+                # Evaluate the predictions
+                score_dict = nn_eval.evaluate_relations(eval_mention_pairs, pred_labels, gold_label_dict)
+
+                # Get the current coref / subset and see if their average beats our best
+                coref_subset_avg = score_dict.get_score('coref').f1 + score_dict.get_score('subset').f1
+                coref_subset_avg /= 2.0
+                if coref_subset_avg >= best_coref_subset_avg - 0.005:
+                    log.info(None, "Previous best coref/subset average F1 of %.2f%% after %d epochs",
+                             100.0 * best_coref_subset_avg, best_coref_subset_epoch)
+                    best_coref_subset_avg = coref_subset_avg
+                    best_coref_subset_epoch = i
+                    log.info(None, "New best at current epoch (%.2f%%)",
+                             100.0 * best_coref_subset_avg)
+                #endif
+
+                # Implement early stopping; if it's been 10 epochs since our best, stop
+                if early_stopping and i >= (best_coref_subset_epoch + 10):
+                    log.info(None, "Stopping early; best scores at %d epochs", best_coref_subset_epoch)
+                    break
+                #endif
+            #endif
         #endfor
         log.info("Saving final model")
         saver.save(sess, model_file)
@@ -906,39 +859,19 @@ def train(sentence_file, mention_idx_file, feature_file,
 #enddef
 
 
-def predict(tf_session, sentence_file, mention_idx_file,
-            feature_file, feature_meta_file,
-            batch_size, scores_file=None):
+def get_pred_scores(tf_session, batch_size, data_dict):
     """
     Evaluates the model loaded in the given session and logs the counts
-    and p/r/f1 on the given data; optionally saves the predicted scores
-    to the scores_file
+    and p/r/f1 on the given data
 
     :param tf_session: Tensorflow session in which the model has
                        been loaded
-    :param sentence_file: Sentence file against which the model
-                          should be evaluated
-    :param mention_idx_file: Mention index file against which
-                             the model should be evaluated
-    :param feature_file: File with sparse mention pair features
-    :param feature_meta_file: File associating sparse indices with feature names
     :param batch_size: Size of the groups of mention pairs to pass
-                       to the network at once
-    :param scores_file: The file in which to save predicted probabilities
+                       to the network at once\
+    :param data_dict: Sentence and mention pair data
     """
     global log, pair_enc_scheme
-
-    gold_labels = list()
-    pred_labels = list()
     pred_scores = dict()
-
-    log.info("Loading data from " + sentence_file + " and " + mention_idx_file)
-    if use_engr_feats:
-        data_dict = nn_util.load_mention_pair_data(sentence_file, mention_idx_file,
-                                                   feature_file, feature_meta_file)
-    else:
-        data_dict = nn_util.load_mention_pair_data(sentence_file, mention_idx_file)
-    #endif
     mention_pairs = data_dict['mention_pair_indices'].keys()
 
     # Get the predict operation
@@ -957,14 +890,12 @@ def predict(tf_session, sentence_file, mention_idx_file,
             batch_tensors = load_batch_first_last_sentence(mention_pair_matrix[i], data_dict)
 
         # Add the labels to the list
-        gold_labels.extend(np.argmax(batch_tensors['labels'], 1))
         if pair_enc_scheme == 'first_avg_last':
             predicted_scores = run_op_first_avg_last(tf_session, predicted_proba, batch_tensors,
                                                      1.0, 1.0, False)
         elif pair_enc_scheme == 'first_last_sentence':
             predicted_scores = run_op_first_last_sentence(tf_session, predicted_proba, batch_tensors,
                                                           1.0, 1.0, False)
-        pred_labels.extend(np.argmax(predicted_scores, 1))
 
         # Take all the scores unless this is the last row
         row_length = len(predicted_scores)
@@ -973,18 +904,65 @@ def predict(tf_session, sentence_file, mention_idx_file,
         for j in range(0, row_length):
             pred_scores[mention_pair_matrix[i][j]] = predicted_scores[j]
     #endfor
+    return pred_scores
+#enddef
 
-    # Print the evaluation
-    nn_util.log_eval(gold_labels, pred_labels, CLASSES, log)
+
+def predict(tf_session, batch_size, sentence_file,
+            mention_idx_file, feature_file,
+            feature_meta_file, label_file, scores_file=None):
+    """
+    Wrapper for making predictions on a pre-trained model, already loaded into
+    the session
+    :param tf_session:
+    :param batch_size:
+    :param sentence_file:
+    :param mention_idx_file:
+    :param feature_file:
+    :param feature_meta_file:
+    :param label_file:
+    :param scores_file:
+    :return:
+    """
+    global embedding_type
+
+    # Load the data
+    log.info("Loading data from " + sentence_file + " and " + mention_idx_file)
+    data_dict = nn_data.load_mention_pair_data(mention_idx_file,
+                                               feature_file, feature_meta_file)
+    sentence_dict = nn_data.load_sentences(sentence_file, embedding_type)
+    for key in sentence_dict.keys():
+        data_dict[key] = sentence_dict[key]
+
+    # Get the predicted scores, given our arguments
+    log.info("Predictiong scores")
+    pred_scores = get_pred_scores(tf_session, batch_size, data_dict)
+
+    # log.warning("Skipping evaluation, since it takes way too long right now for some reason")
+    log.info("Loading data from " + label_file)
+    gold_label_dict = nn_data.load_relation_labels(label_file)
+
+    # If we do an argmax on the scores, we get the predicted labels
+    log.info("Getting labels from scores")
+    mention_pairs = pred_scores.keys()
+    pred_labels = list()
+    for pair in mention_pairs:
+        pred_labels.append(np.argmax(pred_scores[pair]))
+
+    # Evaluate the predictions
+    log.info("Evaluating against the gold")
+    nn_eval.evaluate_relations(mention_pairs, pred_labels, gold_label_dict, log)
 
     # If a scores file was specified, write the scores
+    log.info("Writing scores file")
     if scores_file is not None:
         with open(scores_file, 'w') as f:
             for pair_id in pred_scores.keys():
-                scores = list()
+                score_line = list()
+                score_line.append(pair_id)
                 for score in pred_scores[pair_id]:
-                    scores.append(str(score))
-                f.write(pair_id + "\t" + ",".join(scores) + "\n")
+                    score_line.append(str(math.log(score)))
+                f.write(",".join(score_line) + "\n")
             f.close()
         #endwith
     #endif
@@ -992,7 +970,7 @@ def predict(tf_session, sentence_file, mention_idx_file,
 
 
 def __init__():
-    global rel_type, pair_enc_scheme, data_norm, log, use_engr_feats
+    global rel_type, pair_enc_scheme, data_norm, log, embedding_type
 
     # Parse arguments
     parser = ArgumentParser("ImageCaptionLearn_py: Neural Network for Relation "
@@ -1016,9 +994,6 @@ def __init__():
     parser.add_argument("--weighted_classes", action="store_true",
                         help="Whether to inversely weight the classes "
                              "in the loss")
-    parser.add_argument("--parallel", type=int, default=64,
-                        help="train opt; number of tasks the LSTM may "
-                             "run in parallel")
     parser.add_argument("--learn_rate", type=float, default=0.001,
                         help="train opt; optimizer learning rate")
     parser.add_argument("--adam_epsilon", type=float, default=1e-08,
@@ -1032,22 +1007,15 @@ def __init__():
     parser.add_argument("--other_keep_prob", type=float, default=1.0,
                         help="train opt; probability to keep all other nodes")
     parser.add_argument("--pair_enc_scheme", choices=["first_avg_last", "first_last_sentence"],
-                        default="first_last_sentence", help="train opt; specifies how lstm outputs "
-                                                       "are transformed")
-    parser.add_argument("--sentence_file", #required=True,
-                        type=lambda f: util.arg_file_exists(parser, f),
-                        help="File associating caption IDs with their captions "
-                             "(punctuation tokens removed)")
-    parser.add_argument("--mention_idx_file", #required=True,
-                        type=lambda f: util.arg_file_exists(parser, f),
-                        help="File associating mention pair IDs with "
-                             "the set of indices that define them")
-    parser.add_argument("--feature_file",
-                        type=lambda f: util.arg_file_exists(parser, f),
-                        help="Mention pair feature file (sparse feature format)")
-    parser.add_argument("--feature_meta_file",
-                        type=lambda f: util.arg_file_exists(parser, f),
-                        help="Mention pair feature meta file (associates indices with names)")
+                        default="first_last_sentence",
+                        help="train opt; specifies how lstm outputs are transformed")
+    parser.add_argument("--data_dir", required=True,
+                        type=lambda f: util.arg_path_exists(parser, f),
+                        help="Directory containing raw/, feats/, and scores/ directories")
+    parser.add_argument("--data_root", type=str, required=True,
+                        help="Data file root (eg. flickr30k_train)")
+    parser.add_argument("--eval_data_root", type=str,
+                        help="Data file root for eval data (eg. flickr30k_dev)")
     parser.add_argument("--train", action='store_true', help='Trains a model')
     parser.add_argument("--activation", choices=['sigmoid', 'tanh', 'relu', 'leaky_relu'],
                         default='relu',
@@ -1057,66 +1025,49 @@ def __init__():
     parser.add_argument("--rel_type", choices=['intra', 'cross'], required=True,
                         help="Whether we're dealing with intra-caption or "
                              "cross-caption relations")
-    parser.add_argument("--model_file", type=str, help="Model file to save/load")
-    parser.add_argument("--score_file", type=str,
-                        help="File to which predicted scores will be saved")
+    parser.add_argument("--model_file", #required=True,
+                        type=str, help="Model file to save/load")
+    parser.add_argument("--embedding_type", choices=['w2v', 'glove'], default='w2v',
+                        help="Word embedding type to use")
+    parser.add_argument("--early_stopping", action='store_true',
+                        help="Whether to implement early stopping based on the "+
+                             "evaluation performance")
     args = parser.parse_args()
     arg_dict = vars(args)
 
-    scores_file = arg_dict['score_file']
-    if scores_file is not None:
-        scores_file = abspath(expanduser(scores_file))
-
-    # If a feature and feature meta file were provided, we're
-    # using engineered features
-    if arg_dict['feature_file'] is not None and \
-       arg_dict['feature_meta_file'] is not None:
-        use_engr_feats = True
-
-    # Set our global relation type and pair
-    # encoding scheme
     rel_type = arg_dict['rel_type']
-    pair_enc_scheme = arg_dict['pair_enc_scheme']
     data_norm = arg_dict['data_norm']
-
-    # For quick experimentation purposes, we're going to set
-    # some default values here. Note that this is ONLY for
-    # the grid search over parameters and should be
-    # removed as we move forward
-    arg_dict['sentence_file'] = abspath(expanduser("~/data/tacl201708/nn/flickr30k_train_tune_captions.txt"))
-    mention_idx_root = "~/data/tacl201708/nn/flickr30k_train_tune_mentionPairs_" + rel_type + ".txt"
-    arg_dict['mention_idx_file'] = abspath(expanduser(mention_idx_root))
-    model_file = "~/models/tacl201708/nn/" + \
-                 "relation_" + arg_dict['rel_type'] + "_lstm_" + \
-                 arg_dict['pair_enc_scheme'] + "_" + \
-                 arg_dict['activation'] + "_" + \
-                 "epochs" + str(int(arg_dict['epochs'])) + "_" + \
-                 "lrnRate" + str(arg_dict['learn_rate']) + "_" + \
-                 "adamEps" + str(arg_dict['adam_epsilon']) + "_"
-    if arg_dict['clip_norm'] is not None:
-        model_file += "norm" + str(arg_dict['clip_norm']) + "_"
-    model_file += "batch" + str(int(arg_dict['batch_size'])) + "_" + \
-                  "dropout" + str(int(arg_dict['input_keep_prob'] * 100)) + \
-                  str(int(arg_dict['other_keep_prob'] * 100)) + "_" + \
-                  "lstm" + str(int(arg_dict['lstm_hidden_width'])) + "_" + \
-                  "hdn" + str(int(arg_dict['start_hidden_width'])) + "-" + \
-                  str(int(arg_dict['hidden_depth']))
-    if arg_dict['weighted_classes']:
-        model_file += "_weighted"
-    model_file += ".model"
-    model_file = abspath(expanduser(model_file))
-    arg_dict['model_file'] = model_file
-    arg_dict['feature_file'] = abspath(expanduser('~/data/tacl201708/feats/flickr30k_train_relation_nn.feats'))
-    arg_dict['feature_meta_file'] = abspath(expanduser('~/data/tacl201708/feats/flickr30k_train_relation_nn_meta.json'))
-
+    pair_enc_scheme = arg_dict['pair_enc_scheme']
+    if arg_dict['train']:
+        arg_dict['model_file'] = "/home/ccervan2/models/tacl201711/" + \
+                                 nn_data.build_model_file_name(arg_dict, "rel_lstm")
+    model_file = arg_dict['model_file']
     util.dump_args(arg_dict, log)
 
-    # Grab the possibly-not-yet-created model file from the args
-    # model_file = abspath(expanduser(arg_dict['model_file']))
+    # Construct data files from the root directory and filename
+    data_dir = arg_dict['data_dir'] + "/"
+    data_root = arg_dict['data_root']
+    eval_data_root = arg_dict['eval_data_root']
+    sentence_file = data_dir + "raw/" + data_root + "_captions.txt"
+    mention_idx_file = data_dir + "raw/" + data_root + "_mentionPairs_" + rel_type + ".txt"
+    feature_file = data_dir + "feats/" + data_root + "_relation.feats"
+    feature_meta_file = data_dir + "feats/" + data_root + "_relation_meta.json"
+    label_file = data_dir + "raw/" + data_root + "_mentionPairLabels.txt"
+    eval_sentence_file = data_dir + "raw/" + eval_data_root + "_captions.txt"
+    eval_mention_idx_file = data_dir + "raw/" + eval_data_root + "_mentionPairs_" + rel_type + ".txt"
+    eval_feature_file = data_dir + "feats/" + eval_data_root + "_relation.feats"
+    eval_feature_meta_file = data_dir + "feats/" + eval_data_root + "_relation_meta.json"
+    eval_label_file = data_dir + "raw/" + eval_data_root + "_mentionPair_labels.txt"
 
-    # Set up the word2vec utility once
-    log.info("Initializing word2vec")
-    nn_util.init_w2v()
+    # Load the appropriate word embeddings
+    embedding_type = arg_dict['embedding_type']
+    if embedding_type == 'w2v':
+        log.info("Initializing word2vec")
+        nn_data.init_w2v()
+    elif embedding_type == 'glove':
+        log.info("Initializing glove")
+        nn_data.init_glove()
+    #endif
 
     # Set the random seeds identically every run
     nn_util.set_random_seeds()
@@ -1126,10 +1077,10 @@ def __init__():
 
     # Train, if training was specified
     if arg_dict['train']:
-        train(sentence_file=arg_dict['sentence_file'],
-              mention_idx_file=arg_dict['mention_idx_file'],
-              feature_file=arg_dict['feature_file'],
-              feature_meta_file=arg_dict['feature_meta_file'],
+        train(sentence_file=sentence_file,
+              mention_idx_file=mention_idx_file,
+              feature_file=feature_file,
+              feature_meta_file=feature_meta_file,
               epochs=arg_dict['epochs'], batch_size=arg_dict['batch_size'],
               lstm_hidden_width=arg_dict['lstm_hidden_width'],
               start_hidden_width=arg_dict['start_hidden_width'],
@@ -1137,23 +1088,28 @@ def __init__():
               weighted_classes=arg_dict['weighted_classes'],
               input_dropout=arg_dict['input_keep_prob'],
               other_dropout=arg_dict['other_keep_prob'],
-              n_parallel=arg_dict['parallel'],
               lrn_rate=arg_dict['learn_rate'], clip_norm=arg_dict['clip_norm'],
               adam_epsilon=arg_dict['adam_epsilon'], activation=arg_dict['activation'],
-              model_file=model_file, eval_sentence_file=arg_dict['sentence_file'].replace('train', 'dev'),
-              eval_mention_idx_file=arg_dict['mention_idx_file'].replace('train', 'dev'))
+              model_file=model_file, eval_sentence_file=eval_sentence_file,
+              eval_mention_idx_file=eval_mention_idx_file,
+              eval_feature_file=eval_feature_file,
+              eval_feature_meta_file=eval_feature_meta_file,
+              eval_label_file=eval_label_file,
+              early_stopping=arg_dict['early_stopping'])
     elif arg_dict['predict']:
+        scores_file = data_dir + "scores/" + data_root + \
+                      "_relation_" + rel_type + ".scores"
+
         # Restore our variables
         tf.reset_default_graph()
         with tf.Session() as sess:
             saver = tf.train.import_meta_graph(model_file + ".meta")
             saver.restore(sess, model_file)
-
-            predict(sess, sentence_file=arg_dict['sentence_file'].replace('train', 'dev'),
-                    mention_idx_file=arg_dict['mention_idx_file'].replace('train', 'dev'),
-                    feature_file=arg_dict['feature_file'].replace('train', 'dev'),
-                    feature_meta_file=arg_dict['feature_meta_file'].replace('train', 'dev'),
-                    batch_size=arg_dict['batch_size'], scores_file=scores_file)
+            predict(sess, batch_size=arg_dict['batch_size'],
+                    sentence_file=sentence_file,
+                    mention_idx_file=mention_idx_file,
+                    feature_file=feature_file, feature_meta_file=feature_meta_file,
+                    label_file=label_file, scores_file=scores_file)
         #endwith
     #endif
 #enddef

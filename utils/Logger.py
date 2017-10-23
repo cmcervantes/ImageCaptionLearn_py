@@ -6,7 +6,7 @@ from os.path import abspath, expanduser
 __author__ = "ccervantes"
 
 
-class LogUtil:
+class Logger:
     """
     Logging functionality wrapper
     """
@@ -26,7 +26,7 @@ class LogUtil:
         self._delay = delay
 
         self._levels = dict()
-        levels = LogUtil.get_logging_lvls()
+        levels = Logger.get_logging_lvls()
         for i in range(len(levels)):
             self._levels[levels[i]] = 10 * (i+1)
         #endfor

@@ -1,14 +1,15 @@
-import tensorflow as tf
-import numpy as np
-import math
-import random
 import os
 from argparse import ArgumentParser
 from os.path import abspath, expanduser
 
-from LogUtil import LogUtil
-import icl_util as util
 import nn_util
+import numpy as np
+import tensorflow as tf
+
+import nn_utils.core
+import nn_utils.data
+from utils import icl_util as util
+from utils.LogUtil import LogUtil
 
 ___author___ = "ccervantes"
 
@@ -165,8 +166,8 @@ def setup_relation(batch_size, start_hidden_width, max_depth,
         n_hidden_widths.append(n_hidden_widths[depth-1] / 2)
     for depth in range(0, max_depth):
         with tf.variable_scope("hdn_" + str(depth+1)):
-            weights = nn_util.get_weights([hidden_input_width, n_hidden_widths[depth]])
-            biases = nn_util.get_biases([1, n_hidden_widths[depth]])
+            weights = nn_utils.core.get_weights([hidden_input_width, n_hidden_widths[depth]])
+            biases = nn_utils.core.get_biases([1, n_hidden_widths[depth]])
             logits = tf.matmul(hidden_inputs[depth], weights) + biases
             if activation == 'sigmoid':
                 logits = tf.nn.sigmoid(logits)
@@ -175,7 +176,7 @@ def setup_relation(batch_size, start_hidden_width, max_depth,
             elif activation == 'relu':
                 logits = tf.nn.relu(logits)
             elif activation == 'leaky_relu':
-                logits = nn_util.leaky_relu(logits)
+                logits = nn_utils.core.leaky_relu(logits)
             logits = tf.nn.dropout(logits, dropout)
             hidden_inputs.append(logits)
             hidden_input_width = n_hidden_widths[depth]
@@ -183,8 +184,8 @@ def setup_relation(batch_size, start_hidden_width, max_depth,
     #endfor
 
     with tf.variable_scope("softmax"):
-        weights = nn_util.get_weights([n_hidden_widths[max_depth-1], len(CLASSES)])
-        biases = nn_util.get_biases([1, len(CLASSES)])
+        weights = nn_utils.core.get_weights([n_hidden_widths[max_depth - 1], len(CLASSES)])
+        biases = nn_utils.core.get_biases([1, len(CLASSES)])
         # Because our label distribution is so skewed, we have to
         # add a constant epsilon to all of the values to prevent
         # the loss from being NaN
@@ -300,10 +301,10 @@ def train(sentence_file, mention_idx_file, feature_file,
 
     log.info("Loading data from " + sentence_file + " and " + mention_idx_file)
     if use_engr_feats:
-        data_dict = nn_util.load_mention_pair_data(sentence_file, mention_idx_file,
-                                                   feature_file, feature_meta_file)
+        data_dict = nn_utils.data.load_mention_pair_data(sentence_file, mention_idx_file,
+                                                         feature_file, feature_meta_file)
     else:
-        data_dict = nn_util.load_mention_pair_data(sentence_file, mention_idx_file)
+        data_dict = nn_utils.data.load_mention_pair_data(sentence_file, mention_idx_file)
     #endif
     mention_pairs = data_dict['mention_pair_indices'].keys()
     n_pairs = len(mention_pairs)
@@ -419,10 +420,10 @@ def predict(tf_session, sentence_file, mention_idx_file,
 
     log.info("Loading data from " + sentence_file + " and " + mention_idx_file)
     if use_engr_feats:
-        data_dict = nn_util.load_mention_pair_data(sentence_file, mention_idx_file,
-                                                   feature_file, feature_meta_file)
+        data_dict = nn_utils.data.load_mention_pair_data(sentence_file, mention_idx_file,
+                                                         feature_file, feature_meta_file)
     else:
-        data_dict = nn_util.load_mention_pair_data(sentence_file, mention_idx_file)
+        data_dict = nn_utils.data.load_mention_pair_data(sentence_file, mention_idx_file)
     #endif
     mention_pairs = data_dict['mention_pair_indices'].keys()
 
@@ -589,7 +590,7 @@ def __init__():
     nn_util.init_w2v()
 
     # Set the random seeds identically every run
-    nn_util.set_random_seeds()
+    nn_utils.core.set_random_seeds()
 
     # Set up the minimum tensorflow logging level
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'

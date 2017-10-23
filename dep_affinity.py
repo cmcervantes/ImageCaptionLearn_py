@@ -1,14 +1,14 @@
-import tensorflow as tf
-import random as r
-import numpy as np
-from argparse import ArgumentParser
-from os import listdir
-from os.path import abspath, expanduser, isfile, isdir
-import math
-from ScoreDict import ScoreDict
-from LogUtil import LogUtil
 import linecache
-from itertools import islice
+import math
+import random as r
+from argparse import ArgumentParser
+from os.path import abspath, expanduser
+
+import numpy as np
+import tensorflow as tf
+
+from utils.LogUtil import LogUtil
+from utils.ScoreDict import ScoreDict
 
 NUM_FEATS = 4396
 NUM_IMG_FEATS = 4096
@@ -224,27 +224,27 @@ def train(train_file, eval_file, eval_type_file, learning_rate,
         scores = type_score_dict[lex_type]
         overall_scores.merge(scores)
         log.info('---Confusion Matrix---')
-        scores.printConfusion()
+        scores.print_confusion()
 
         log.info("---Scores---")
         for label in scores.keys:
-            print str(label) + "\t" + scores.getScore(label).toString() + \
-                  " - %d (%.2f%%)" % (scores.getGoldCount(label), scores.getGoldPercent(label))
-            print str(label) + "\t Acc: " + str(scores.getAccuracy(label))
+            print str(label) + "\t" + scores.get_score(label).toString() + \
+                  " - %d (%.2f%%)" % (scores.get_gold_count(label), scores.get_gold_percent(label))
+            print str(label) + "\t Acc: " + str(scores.get_accuracy(label))
         #endfor
     #endfor
 
     log.info('Overall Scores')
     log.info('---Confusion Matrix---')
-    overall_scores.printConfusion()
+    overall_scores.print_confusion()
 
     log.info("---Scores---")
     for label in overall_scores.keys:
-        print str(label) + "\t" + overall_scores.getScore(label).toString() + " - %d (%.2f%%)" % \
-              (overall_scores.getGoldCount(label), overall_scores.getGoldPercent(label))
-        print str(label) + "\t Acc: %.2f%%" % (overall_scores.getAccuracy(label))
+        print str(label) + "\t" + overall_scores.get_score(label).toString() + " - %d (%.2f%%)" % \
+                                                                               (overall_scores.get_gold_count(label), overall_scores.get_gold_percent(label))
+        print str(label) + "\t Acc: %.2f%%" % (overall_scores.get_accuracy(label))
         #endfor
-    print "Total Acc: %.2f%%" % (overall_scores.getAccuracy())
+    print "Total Acc: %.2f%%" % (overall_scores.get_accuracy())
 #enddef
 
 

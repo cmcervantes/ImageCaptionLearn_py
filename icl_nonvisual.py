@@ -1,18 +1,19 @@
-from sklearn.svm import SVC
-from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier
-from argparse import ArgumentParser
-from os.path import abspath, expanduser, isfile
-import random as r
 import cPickle
 import json
+from argparse import ArgumentParser
+from os.path import abspath, expanduser
+
 import numpy as np
 from scipy import sparse
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+from utils.LogUtil import LogUtil
 
-from LogUtil import LogUtil
-from ScoreDict import ScoreDict
-import icl_util as util
+from utils import icl_util as util, icl_data_util
+from utils.ScoreDict import ScoreDict
+
 #from icl_affinity import load_cca_data
 
 """
@@ -23,7 +24,7 @@ def train(model, balance, max_iter=None, max_depth=None,
     global log, train_file, meta_dict, model_file
 
     log.tic('info', "Loading training data")
-    x, y, ids = util.load_sparse_feats(train_file, meta_dict, ignored_feats, log)
+    x, y, ids = icl_data_util.load_sparse_feats(train_file, meta_dict, ignored_feats, log)
 
     log.toc('info')
 
@@ -61,7 +62,7 @@ def evaluate(lemma_file=None, hyp_file=None, ignored_feats=set(), save_scores=Tr
     learner = cPickle.load(open(model_file, 'r'))
 
     log.info("Loading eval data")
-    x_eval, y_eval, ids_eval = util.load_sparse_feats(eval_file, meta_dict, ignored_feats, log)
+    x_eval, y_eval, ids_eval = icl_data_util.load_sparse_feats(eval_file, meta_dict, ignored_feats, log)
 
     lemma_dict = dict()
     lemmas = set()
@@ -139,16 +140,16 @@ def evaluate(lemma_file=None, hyp_file=None, ignored_feats=set(), save_scores=Tr
                     "nonvis_r,nonvis_p,nonvis_f1,accuracy,correct_count\n")
             for l in lemma_scores.keys():
                 s = lemma_scores[l]
-                totalCount = s.getGoldCount(0) + s.getGoldCount(1)
+                totalCount = s.get_gold_count(0) + s.get_gold_count(1)
                 if totalCount > 0:
                     line = l + "," + str(totalCount) + ","
-                    line += str(s.getGoldCount(0)) + "," + str(s.getGoldCount(1)) + ","
-                    line += str(s.getPredCount(0)) + "," + str(s.getPredCount(1)) + ","
-                    score_vis = s.getScore(0)
-                    score_nonvis = s.getScore(1)
+                    line += str(s.get_gold_count(0)) + "," + str(s.get_gold_count(1)) + ","
+                    line += str(s.get_pred_count(0)) + "," + str(s.get_pred_count(1)) + ","
+                    score_vis = s.get_score(0)
+                    score_nonvis = s.get_score(1)
                     line += str(score_vis.r) + "," + str(score_vis.p) + "," + str(score_vis.f1) + ","
                     line += str(score_nonvis.r) + "," + str(score_nonvis.p) + "," + str(score_nonvis.f1) + ","
-                    line += str(s.getAccuracy() / 100.0) + "," + str(s.getCorrectCount())
+                    line += str(s.get_accuracy() / 100.0) + "," + str(s.get_correct_count())
                     line += "\n"
                     f.write(line)
             f.close()
@@ -158,28 +159,28 @@ def evaluate(lemma_file=None, hyp_file=None, ignored_feats=set(), save_scores=Tr
                     "nonvis_r,nonvis_p,nonvis_f1,accuracy,correct_count\n")
             for h in hyp_scores.keys():
                 s = hyp_scores[h]
-                totalCount = s.getGoldCount(0) + s.getGoldCount(1)
+                totalCount = s.get_gold_count(0) + s.get_gold_count(1)
                 if totalCount > 0:
                     line = h + "," + str(totalCount) + ","
-                    line += str(s.getGoldCount(0)) + "," + str(s.getGoldCount(1)) + ","
-                    line += str(s.getPredCount(0)) + "," + str(s.getPredCount(1)) + ","
-                    score_vis = s.getScore(0)
-                    score_nonvis = s.getScore(1)
+                    line += str(s.get_gold_count(0)) + "," + str(s.get_gold_count(1)) + ","
+                    line += str(s.get_pred_count(0)) + "," + str(s.get_pred_count(1)) + ","
+                    score_vis = s.get_score(0)
+                    score_nonvis = s.get_score(1)
                     line += str(score_vis.r) + "," + str(score_vis.p) + "," + str(score_vis.f1) + ","
                     line += str(score_nonvis.r) + "," + str(score_nonvis.p) + "," + str(score_nonvis.f1) + ","
-                    line += str(s.getAccuracy() / 100.0) + "," + str(s.getCorrectCount())
+                    line += str(s.get_accuracy() / 100.0) + "," + str(s.get_correct_count())
                     line += "\n"
                     f.write(line)
             f.close()
 
     log.info("---Confusion matrix---")
-    scores.printConfusion()
+    scores.print_confusion()
 
     log.info("---Scores---")
     for label in scores.keys:
-        print str(label) + "\t" + scores.getScore(label).toString() + " - %d (%.2f%%)" % \
-              (scores.getGoldCount(label), scores.getGoldPercent(label))
-    log.info(None, "Accuracy: %.2f%%", scores.getAccuracy())
+        print str(label) + "\t" + scores.get_score(label).toString() + " - %d (%.2f%%)" % \
+                                                                       (scores.get_gold_count(label), scores.get_gold_percent(label))
+    log.info(None, "Accuracy: %.2f%%", scores.get_accuracy())
 
     if save_scores:
         log.info("Writing scores to " + scores_file)
@@ -228,7 +229,7 @@ def nonvis_with_grounding(max_iter):
 
     ### Nonvis stuff ###
     log.info("Getting nonvis feats")
-    x_nonvis, y_nonvis, ids_nonvis = util.load_sparse_feats(eval_file, meta_dict, set(), log)
+    x_nonvis, y_nonvis, ids_nonvis = icl_data_util.load_sparse_feats(eval_file, meta_dict, set(), log)
     label_dict_nonvis = dict()
     for i in range(0, len(ids_nonvis)):
         label_dict_nonvis[ids_nonvis[i]] = y_nonvis[i]
@@ -304,13 +305,13 @@ def nonvis_with_grounding(max_iter):
     #endfor
 
     log.info("---Confusion matrix---")
-    scores.printConfusion()
+    scores.print_confusion()
 
     log.info("---Scores---")
     for label in scores.keys:
-        print str(label) + "\t" + scores.getScore(label).toString() + " - %d (%.2f%%)" % \
-                                                                      (scores.getGoldCount(label), scores.getGoldPercent(label))
-    log.info(None, "Accuracy: %.2f%%", scores.getAccuracy())
+        print str(label) + "\t" + scores.get_score(label).toString() + " - %d (%.2f%%)" % \
+                                                                       (scores.get_gold_count(label), scores.get_gold_percent(label))
+    log.info(None, "Accuracy: %.2f%%", scores.get_accuracy())
 #enddef
 
 log = LogUtil(lvl='debug', delay=45)
@@ -355,7 +356,7 @@ ablation_file = arg_dict['ablation_file']
 ablation_groups = None
 if ablation_file is not None:
     ablation_file = abspath(expanduser(ablation_file))
-    ablation_groups = util.load_ablation_file(ablation_file)
+    ablation_groups = icl_data_util.load_ablation_file(ablation_file)
 
 # Parse the other args
 model_type = arg_dict['model']

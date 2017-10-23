@@ -1,13 +1,14 @@
-from pycocotools.coco import COCO
-import numpy as np
-import skimage.io as io
-import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon
-import icl_util as util
-from LogUtil import LogUtil
-from os.path import abspath, expanduser
 import random
+from os.path import abspath, expanduser
+
+import matplotlib.pyplot as plt
 import pylab
+import skimage.io as io
+
+from pycocotools.coco import COCO
+from utils import str_util
+from utils.LogUtil import LogUtil
+
 pylab.rcParams['figure.figsize'] = (10.0, 8.0)
 
 def get_captions(coco_obj, img_id):
@@ -45,13 +46,13 @@ coco_caps = COCO(caption_file)
 cats = coco.loadCats(coco.getCatIds())
 log.info("Coco Categories")
 nms = [cat['name'] for cat in cats]
-cat_rows = util.list_to_rows(nms, 4)
-print util.rows_to_str(cat_rows, False)
+cat_rows = str_util.list_to_rows(nms, 4)
+print str_util.rows_to_str(cat_rows, False)
 
 log.info("Super Categories")
 nms = set([cat['supercategory'] for cat in cats])
-cat_rows = util.list_to_rows(nms, 4)
-print util.rows_to_str(cat_rows, False)
+cat_rows = str_util.list_to_rows(nms, 4)
+print str_util.rows_to_str(cat_rows, False)
 cat_dict = dict()
 for cat in cats:
     cat_dict[cat['id']] = cat

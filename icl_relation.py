@@ -1,12 +1,14 @@
+import cPickle
+import json
+from argparse import ArgumentParser
+from os.path import abspath, expanduser
+
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import normalize
-import cPickle
-from os.path import abspath, expanduser
-from argparse import ArgumentParser
-from ScoreDict import ScoreDict
-from LogUtil import LogUtil
-import icl_util as util
-import json
+from utils.LogUtil import LogUtil
+
+from utils import icl_util as util, icl_data_util
+from utils.ScoreDict import ScoreDict
 
 """
 Trains the relation model as a multinomial logistic regression model
@@ -15,7 +17,7 @@ def train(solver, max_iter, balance, norm, warm_start, multiclass_mode, ignored_
     global log, meta_dict, train_file, model_file
 
     log.tic('info', "Loading training data")
-    x, y, ids = util.load_sparse_feats(train_file, meta_dict, ignored_feats, log)
+    x, y, ids = icl_data_util.load_sparse_feats(train_file, meta_dict, ignored_feats, log)
     if norm is not None:
         normalize(x, norm=norm, copy=False)
     log.toc('info')
@@ -47,8 +49,8 @@ def save_scores(ignored_feats=set()):
 
     log.info("Loading eval data")
     x_eval, y_eval, ids_eval = \
-        util.load_sparse_feats(eval_file, meta_dict,
-                               ignored_feats, log)
+        icl_data_util.load_sparse_feats(eval_file, meta_dict,
+                                        ignored_feats, log)
 
     log.info("Predicting scores")
     y_pred_probs = learner.predict_log_proba(x_eval)
@@ -76,8 +78,8 @@ def evaluate(norm, ignored_feats=set()):
 
     log.info("Loading eval data")
     x_eval, y_eval, ids_eval = \
-        util.load_sparse_feats(eval_file, meta_dict,
-                               ignored_feats, log)
+        icl_data_util.load_sparse_feats(eval_file, meta_dict,
+                                        ignored_feats, log)
     if norm is not None:
         normalize(x_eval, norm=norm, copy=False)
     #endif
@@ -134,12 +136,12 @@ def evaluate(norm, ignored_feats=set()):
     #endwith
 
     log.info("---Confusion matrix---")
-    scores.printConfusion()
+    scores.print_confusion()
 
     log.info("---Scores---")
     for label in scores.keys:
-        print str(label) + "\t" + scores.getScore(label).toString() + " - %d (%.2f%%)" % \
-                (scores.getGoldCount(label), scores.getGoldPercent(label))
+        print str(label) + "\t" + scores.get_score(label).toString() + " - %d (%.2f%%)" % \
+                                                                       (scores.get_gold_count(label), scores.get_gold_percent(label))
     #endfor
 
     if scores_file is not None:
@@ -154,7 +156,7 @@ def evaluate(norm, ignored_feats=set()):
         #endfor
     #endif
 
-    print "Acc: " + str(scores.getAccuracy()) + "%"
+    print "Acc: " + str(scores.get_accuracy()) + "%"
 #enddef
 
 """
@@ -184,8 +186,8 @@ def tune():
     global train_file, eval_file, meta_dict
 
     log.tic('info', 'Loading data')
-    x_train, y_train, ids_train = util.load_sparse_feats(train_file, meta_dict['max_idx'], log)
-    x_eval, y_eval, ids_eval = util.load_sparse_feats(eval_file, meta_dict['max_idx'], log)
+    x_train, y_train, ids_train = icl_data_util.load_sparse_feats(train_file, meta_dict['max_idx'], log)
+    x_eval, y_eval, ids_eval = icl_data_util.load_sparse_feats(eval_file, meta_dict['max_idx'], log)
     ids_nonvis_gold = load_nonvis_ids()
     log.toc('info')
 
@@ -230,12 +232,12 @@ def tune():
                     #endfor
 
                     log.info("---Confusion matrix---")
-                    scores.printConfusion()
+                    scores.print_confusion()
 
                     log.info("---Scores---")
                     for label in scores.keys:
-                        print str(label) + "\t" + scores.getScore(label).toString() + " - %d (%.2f%%)" % \
-                                  (scores.getGoldCount(label), scores.getGoldPercent(label))
+                        print str(label) + "\t" + scores.get_score(label).toString() + " - %d (%.2f%%)" % \
+                                                                                       (scores.get_gold_count(label), scores.get_gold_percent(label))
                     #endfor
                 #endfor
             #endfor
@@ -294,7 +296,7 @@ ablation_file = arg_dict['ablation_file']
 ablation_groups = None
 if ablation_file is not None:
     ablation_file = abspath(expanduser(ablation_file))
-    ablation_groups = util.load_ablation_file(ablation_file)
+    ablation_groups = icl_data_util.load_ablation_file(ablation_file)
 nonvis_file = arg_dict['nonvis_file']
 meta_nonvis_file = None
 if nonvis_file is not None:

@@ -1,14 +1,14 @@
-from sklearn.linear_model import LogisticRegression
-from argparse import ArgumentParser
-from os.path import abspath, expanduser
 import cPickle
 import json
-from scipy import stats
-import mord
+from argparse import ArgumentParser
+from os.path import abspath, expanduser
 
-from LogUtil import LogUtil
-from ScoreDict import ScoreDict
-import icl_util as util
+import mord
+from scipy import stats
+from utils.LogUtil import LogUtil
+
+from utils import icl_util as util, icl_data_util
+from utils.ScoreDict import ScoreDict
 
 """
 Trains the cardinality classifier as a multinomial logistic regression
@@ -19,7 +19,7 @@ def train(max_iter, balance=False, warm_start=None, ignored_feats=set()):
     global log, train_file, meta_dict, model_file
 
     log.tic('info', "Loading training data")
-    x, y, ids = util.load_sparse_feats(train_file, meta_dict, ignored_feats, log)
+    x, y, ids = icl_data_util.load_sparse_feats(train_file, meta_dict, ignored_feats, log)
     log.toc('info')
 
     log.tic('info', "Training")
@@ -53,7 +53,7 @@ def evaluate(ignored_feats=set()):
     learner = cPickle.load(open(model_file, 'r'))
 
     log.info("Loading eval data")
-    x_eval, y_eval, ids_eval = util.load_sparse_feats(eval_file, meta_dict, ignored_feats, log)
+    x_eval, y_eval, ids_eval = icl_data_util.load_sparse_feats(eval_file, meta_dict, ignored_feats, log)
 
     log.info("Evaluating")
     y_pred_probs = learner.predict_log_proba(x_eval)
@@ -72,17 +72,17 @@ def evaluate(ignored_feats=set()):
     #endfor
 
     log.info("---Confusion matrix---")
-    scores.printConfusion()
+    scores.print_confusion()
 
     log.info("---Scores---")
     for label in scores.keys:
-        print str(label) + "\t" + scores.getScore(label).toLatexString() + " & %.2f\\%%\\\\" % \
-              (scores.getGoldPercent(label))
+        print str(label) + "\t" + scores.get_score(label).toLatexString() + " & %.2f\\%%\\\\" % \
+                                                                            (scores.get_gold_percent(label))
     kurtoses = list()
     for log_proba in y_pred_probs:
         kurtoses.append(stats.kurtosis(log_proba, axis=0, fisher=True, bias=True))
     log.info(None, "Accuracy: %.2f%%; Kurtoses: %.2f",
-             scores.getAccuracy(), sum(kurtoses) / len(kurtoses))
+             scores.get_accuracy(), sum(kurtoses) / len(kurtoses))
 
     log.info("Writing probabilities to file")
     with open(scores_file, 'w') as f:
@@ -142,7 +142,7 @@ ablation_file = arg_dict['ablation_file']
 ablation_groups = None
 if ablation_file is not None:
     ablation_file = abspath(expanduser(ablation_file))
-    ablation_groups = util.load_ablation_file(ablation_file)
+    ablation_groups = icl_data_util.load_ablation_file(ablation_file)
 
 # Parse the other args
 max_iter = arg_dict['max_iter']

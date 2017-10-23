@@ -1,10 +1,12 @@
-from os.path import abspath, expanduser, isfile
-from sklearn.linear_model import LogisticRegression
-import numpy as np
 import cPickle
 from argparse import ArgumentParser
-from LogUtil import LogUtil
-import icl_util as util
+from os.path import abspath, expanduser, isfile
+
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+
+from utils import icl_util as util
+from utils.LogUtil import LogUtil
 
 """
 Loads cca data from file as an (ids, x, y) tuple

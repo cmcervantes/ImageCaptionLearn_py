@@ -1,8 +1,9 @@
 import numpy as np
 from scipy import sparse
-from os.path import abspath, expanduser, exists
 
-__author__ = "ccervantes"
+import core as util
+
+__author__ = 'ccervantes'
 
 
 def load_very_sparse_feats(filename, meta_dict=None, ignored_feats=None):
@@ -72,7 +73,7 @@ def load_very_sparse_feats(filename, meta_dict=None, ignored_feats=None):
 
                     # If this is one of the ignored features, drop it
                     if ignored_feats is not None and \
-                       is_ignored_idx(idx, meta_dict, ignored_feats):
+                       util.is_ignored_idx(idx, meta_dict, ignored_feats):
                         continue
 
                     # Adjust the index, to account for the missing
@@ -188,7 +189,7 @@ def load_sparse_feats(filename, meta_dict, ignored_feats=None):
 
                     # If this is one of the ignored features, drop it
                     if ignored_feats is not None and \
-                       is_ignored_idx(idx, meta_dict, ignored_feats):
+                            util.is_ignored_idx(idx, meta_dict, ignored_feats):
                         continue
 
                     # Adjust the index, to account for the missing
@@ -207,7 +208,7 @@ def load_sparse_feats(filename, meta_dict, ignored_feats=None):
     #endwith
 
     return x, y, ids
-#endif
+#enddef
 
 
 def load_dense_feats(filename):
@@ -289,235 +290,3 @@ def load_ablation_file(filename):
     return feature_groups
 #enddef
 
-
-def is_ignored_idx(idx, meta_dict, ignored_feats):
-    """
-    Returns whether the given idx is one of the
-    ignored features (it checks the ranges and
-    values in the meta_dict)
-    :param idx:
-    :param meta_dict:
-    :param ignored_feats:
-    :return:
-    """
-    is_ignored = False
-    for feat in ignored_feats:
-        val = meta_dict[feat]
-        if isinstance(val, list):
-            is_ignored |= val[0] <= idx <= val[1]
-        else:
-            is_ignored |= idx == val
-        #endif
-    return is_ignored
-#enddef
-
-
-def dump_args(arg_dict, log):
-    """
-    Dumps all of the argument values to the logger
-    so it's easier to keep track of experiment params
-
-    :param arg_dict: Argparse dict
-    :param log: LogUtil obect
-    :return:
-    """
-    for arg in arg_dict.keys():
-        log.debug(None, "%s: %s", arg, str(arg_dict[arg]))
-    #endfor
-#enddef
-
-
-"""
-Returns the list as an evenly-divided
-list of lists (for processing as a table)
-"""
-def list_to_rows(lst, num_cols):
-    lst = list(lst)
-
-    #add a row if the list isn't neatly divisible
-    num_rows = len(lst) / num_cols
-    if len(lst) % num_rows > 0:
-        num_rows += 1
-
-    #partition the list into a list of rows
-    rows = list()
-    for i in range(0, num_rows):
-        row = list()
-        for j in range(i * num_cols, (i+1) * num_cols):
-            if j < len(lst):
-                row.append(str(lst[j]))
-            else:
-                row.append("")
-        rows.append(row)
-    return rows
-#enddef
-
-
-def rows_to_str(rows, has_headers=False, use_latex=False):
-    """
-    Returns a string representation of the given
-    row list (a list of lists) as a formatted table
-
-    :param rows: List of string lists
-    :param has_headers: Whether the given rows include column
-                        and rows headers (exclusive with use_latex)
-    :param use_latex: Whether to use latex table formatting
-    :return: Single string for the formatted table
-    """
-    # Get the number of rows / columns
-    num_rows = len(rows)
-    num_cols = 0
-    for row in rows:
-        if len(row) > num_cols:
-            num_cols = len(row)
-
-    # Get the width of each column
-    col_widths = [0] * num_cols
-    for row in rows:
-        for c in range(0, len(row)):
-            col = row[c]
-            if len(col) > col_widths[c]:
-                col_widths[c] = len(col)
-        #endfor
-    #endfor
-
-    table_str = ""
-    if use_latex:
-        header = '\\begin{tabular}{'
-        for i in range(0, num_cols):
-            header += 'l'
-        header += '}'
-        table_str += header + "\n"
-
-        for i in range(0, len(rows)):
-            row_str = '\t'+' & '.join(rows[i])
-            if i < len(rows) - 1:
-                row_str += "\\\\"
-            table_str += row_str + "\n"
-        table_str += "\\end{tabular}"
-    else:
-        # Specify the formatting string, including the
-        # row header separation (where applicable)
-        format_str = ""
-        start_idx = 0
-        if has_headers:
-            format_str = "%-" + str(col_widths[0]+1) + "s | "
-            start_idx += 1
-        #endif
-        for i in range(start_idx, num_cols):
-            format_str += "%-" + str(col_widths[i] + 1) + "s "
-        format_str += "\n"
-
-        # Create the table string from the given rows
-        # starting with the first row (in case it contains
-        # column headers)
-        first_row = list()
-        for c in range(0, num_cols):
-            if c < len(rows[0]):
-                first_row.append(rows[0][c])
-            else:
-                first_row.append("")
-        #endfor
-        table_str = format_str % tuple(first_row)
-
-        # If headers were specified, add a row of dashes
-        if has_headers:
-            for c in range(0, num_cols):
-                for w in range(0, col_widths[c] + 2):
-                    table_str += "-"
-                # first column has a pipe and extra space
-                if c == 0:
-                    table_str += "|-"
-            #endfor
-            table_str += "\n"
-        #endif
-
-        # Add the other rows
-        for r in range(1, num_rows):
-            row_str = list()
-            for c in range(0, num_cols):
-                if c < len(rows[r]):
-                    row_str.append(rows[r][c])
-                else:
-                    row_str.append("")
-                #endif
-            #endfor
-            table_str += format_str % tuple(row_str)
-        #endfor
-        table_str = table_str[0:len(table_str)-1]
-    #endif
-
-    return table_str
-#enddef
-
-
-"""
-Returns the idx with the max value (in the arr)
-"""
-def get_max_idx(arr):
-    idx = -1
-    if isinstance(arr, list):
-        max_idx = -float('inf')
-        for i in range(0, len(arr)):
-            if arr[i] > max_idx:
-                max_idx = arr[i]
-                idx = i
-            #endif
-        #endfor
-    #endif
-    return idx
-#enddef
-
-
-def kv_str_to_dict(kv_str):
-    """
-    Parses a key-value string (key_0:val_0;key_1:val_1)
-    to a dictionary, mapping keys to values
-    :param kv_str: Key value string
-    :return: Dictionary of keys and values
-    """
-    kv_dict = dict()
-    for kv_pair in kv_str.split(';'):
-        kv_split = kv_pair.split(":")
-        kv_dict[kv_split[0]] = kv_split[1]
-    #endfor
-    return kv_dict
-#enddef
-
-
-def list_to_index_dict(l):
-    """
-    Converts a list of items to
-    an index dictionary, mapping
-    the item at position i to
-    the value i
-    :param l: List of items
-    :return: Mapping of items to list index
-    """
-    d = dict()
-    for i in range(0, len(l)):
-        d[l[i]] = i
-    return d
-#enddef
-
-
-def arg_file_exists(parser, filename):
-    """
-    Expands the given filename and checks if
-    the file exists; returning the expanded,
-    absolute path if so and causing a parser
-    error if not
-
-    :param parser:   Argument parser with which
-                     to cause an error
-    :param filename: Filename to check
-    :return:         Absolute path of filename
-    """
-    if filename is not None:
-        filename = abspath(expanduser(filename))
-        if exists(filename):
-            return filename
-        #endif
-    #endif
-    parser.error("\nCould not find " + filename)
-#enddef

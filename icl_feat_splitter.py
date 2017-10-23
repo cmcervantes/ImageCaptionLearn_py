@@ -1,8 +1,8 @@
-from os.path import abspath, expanduser
 from argparse import ArgumentParser
-import icl_util as util
-from LogUtil import LogUtil
+from os.path import abspath, expanduser
 
+from utils import icl_util as util
+from utils.LogUtil import LogUtil
 
 log = LogUtil(lvl='debug', delay=45)
 parser = ArgumentParser("ImageCaptionLearn_py: Feature File Splitter")
