@@ -1,5 +1,7 @@
 import json
 import numpy as np
+from os import listdir
+from os.path import isfile
 from utils import string as str_util
 from utils import data as data_util
 from utils.Word2Vec import Word2Vec
@@ -24,7 +26,7 @@ def init_w2v():
 
 def init_glove():
     """
-
+    Initializes this utility's glove module
     :return:
     """
     global __GLOVE_DICT, __GLOVE_PATH
@@ -44,7 +46,7 @@ def init_glove():
 
 def get_glove_matrix(sentence):
     """
-
+    Returns the glove matrix for the given sentence
     :param sentence:
     :return:
     """
@@ -111,208 +113,142 @@ def load_sentences(sentence_file, embedding_type='w2v'):
 #enddef
 
 
-def load_mention_pair_data(mention_idx_file, feats_file=None, feats_meta_file=None):
+def load_mentions(mention_idx_file, task, feats_file, feats_meta_file, n_classes):
     """
-    Reads the mention pair index file, mapping mention pair IDs to
-    first/last word indices, sentence IDs, labels, and
-    normalization vectors (for averages, where appropriate).
-    Optionally reads a feature and feature meta file and adds these
-    vectors to the data dict
+    Reads the mention index file, mapping mention indices (either by the pair
+    or individually) with indices, labels, and feature vectors
 
-    :param mention_idx_file: File containing mention pair IDs and index tuples
+    :param mention_idx_file: File containing mention pair or mention IDs and index tuples
+    :param task: {rel_intra, rel_cross, nonvis, card, affinity}
     :param feats_file: File containing engineered (sparse) features
     :param feats_meta_file: File associating engineered feature indices with
                             human-readable names
-    :return Dictionary storing the aforementioned dictionaries
+    :param n_classes: Number of classes
+    :return: Dictionary storing the aforementioned dictionaries
     """
     data_dict = dict()
 
     # Load the mention index file, which we assume is in the format
-    #   <pair_id>     <m1_start>,<m1_end>,<m2_start>,<m2_end>   <label>
-    data_dict['mention_pair_cap_ids'] = dict()
-    data_dict['mention_pair_indices'] = dict()
-    data_dict['mention_pair_norm_vecs'] = dict()
-    data_dict['mention_pair_labels'] = dict()
+    #   <m_id>      <m1_start>,<m1_end>                         <label>
+    # or
+    #   <pair_id>   <m1_start>,<m1_end>,<m2_start>,<m2_end>     <label>
+    # depending whether we're operating on mentions or mention pairs
+    data_dict['caption_ids'] = dict()
+    data_dict['mention_indices'] = dict()
+    data_dict['labels'] = dict()
     if mention_idx_file is not None:
         with open(mention_idx_file, 'r') as f:
             for line in f.readlines():
                 # Parse the ID to get the caption(s) from it
-                id_split = line.split("\t")
-                pair_id = id_split[0].strip()
+                line_split = line.strip().split("\t")
+                id = line_split[0].strip()
 
-                # Associate each mention pair with a tuple of its caption IDs
-                id_dict = str_util.kv_str_to_dict(pair_id)
-                cap_1 = id_dict['doc'] + "#" + id_dict['caption_1']
-                cap_2 = id_dict['doc'] + "#" + id_dict['caption_2']
-                data_dict['mention_pair_cap_ids'][pair_id] = (cap_1, cap_2)
+                if "rel" in task:
+                    # If we're dealing with mention pairs, associate
+                    # each with a tuple of their caption IDs
+                    id_dict = str_util.kv_str_to_dict(id)
+                    cap_1 = id_dict['doc'] + "#" + id_dict['caption_1']
+                    cap_2 = id_dict['doc'] + "#" + id_dict['caption_2']
+                    data_dict['caption_ids'][id] = (cap_1, cap_2)
+                elif task == "nonvis" or task == "card" or task == "affinity":
+                    # If we're dealing with mentions, associate each
+                    # with their originating caption ID
+                    data_dict['caption_ids'][id] = id.split(";")[0]
+                #endif
 
-                # Parse the mention pair indices as actual integers
-                # and store those lists
-                indices_str = id_split[1].strip().split(",")
+                # Parse the indices as integers and store the lists
                 indices = list()
-                for i in indices_str:
-                    indices.append(int(i))
-                data_dict['mention_pair_indices'][pair_id] = indices
+                for i in line_split[1].strip().split(","):
+                    indices.append(int(i.strip()))
+                data_dict["mention_indices"][id] = indices
 
-                '''
-                # Create the normalization vectors for each mention, associating
-                # each with 2*n_max_seq 0s, except for indices corresponding
-                # to the mention (twice, because we need both forward and backward);
-                # Since we're averaging the forward and backward outputs of a mention,
-                # we want the norm value to be 1 / 2|m|
-                # NOTE: If we're running into memory problems, we should have one
-                # of these arrays per unique mention, not one per appearance in a mention
-                # pair
-                norm_vec_i = np.zeros(2*data_dict['max_seq_len'])
-                norm_vec_j = np.zeros(2*data_dict['max_seq_len'])
-                norm_i = 1 / (2 * (1 + indices[1] - indices[0]))
-                norm_j = 1 / (2 * (1 + indices[3] - indices[2]))
-                for idx in range(indices[0], indices[1]+1):
-                    norm_vec_i[idx] = norm_i
-                    norm_vec_i[data_dict['max_seq_len'] + idx] = norm_i
-                for idx in range(indices[2], indices[3]+1):
-                    norm_vec_j[idx] = norm_j
-                    norm_vec_j[data_dict['max_seq_len'] + idx] = norm_j
-                #endfor
-                data_dict['mention_pair_norm_vecs'][pair_id] = (norm_vec_i, norm_vec_j)
-                '''
-
-                # Represent the label as a one-hot (and since this is for
-                # relations, we know this should be 4-dimensional
-                label = np.zeros([4])
-                label[int(id_split[2].strip())] = 1.0
-                data_dict['mention_pair_labels'][pair_id] = label
+                # the label is a one-hot, where the entry in the
+                # file is the appropriate index; ignore affinity
+                # labels, since these are populated elsewhere
+                if task != "affinity":
+                    label = np.zeros([n_classes])
+                    label[int(line_split[2].strip())] = 1.0
+                    ['labels'][id] = label
+                #endif
             #endfor
         #endwith
     #endif
 
-    # If feature files have been provided, add those to the data dict too
+    # Add the feature files to the data dict
     if feats_file is not None and feats_meta_file is not None:
-        meta_dict = None
-        if feats_meta_file is not None:
-            meta_dict = json.load(open(feats_meta_file, 'r'))
-            data_dict['max_feat_idx'] = meta_dict['max_idx']
+        meta_dict = json.load(open(feats_meta_file, 'r'))
+        data_dict['n_mention_feats'] = meta_dict['max_idx']
         X, _, IDs = data_util.load_sparse_feats(feats_file, meta_dict)
-        data_dict['mention_pair_feats'] = dict()
+        data_dict['mention_features'] = dict()
         for i in range(0, len(IDs)):
-            data_dict['mention_pair_feats'][IDs[i]] = X[i]
+            data_dict['mention_features'][IDs[i]] = X[i]
     #endif
     return data_dict
 #enddef
 
 
-def load_mention_data(mention_idx_file, n_classes,
-                      feats_file=None, feats_meta_file=None):
+def load_boxes(box_dir, mention_box_label_file):
     """
-    Reads the mention index file, mapping mention IDs to
-    first/last word indices, sentence IDs, labels, and
-    normalization vectors (for averages, where appropriate).
-    Optionally reads a feature and feature meta file and adds these
-    vectors to the data dict
-
-    :param mention_idx_file: File containing mention IDs and index tuples
-    :param n_classes: Number of classes for this task
-    :param feats_file: File containing engineered (sparse) features
-    :param feats_meta_file: File associating engineered feature indices with
-                            human-readable names
-    :return Dictionary storing the aforementioned dictionaries
+    Reads the box index file, mapping mention/box indices with
+    labels and loads all box features from the box_dir
+    :param box_dir: Directory where box feature files are located
+    :param mention_box_label_file: File containing box/mention affinity labels
+    :return: Dictionary storing the aforementioned dictionaries
     """
     data_dict = dict()
 
-    # Load the mention index file, which we assume is in the format
-    #   <m_id>     <m1_start>,<m1_end>   <label>
-    data_dict['mention_cap_ids'] = dict()
-    data_dict['mention_indices'] = dict()
-    data_dict['mention_norm_vecs'] = dict()
-    data_dict['mention_labels'] = dict()
-    if mention_idx_file is not None:
-        with open(mention_idx_file, 'r') as f:
-            for line in f.readlines():
-                # Parse the line into the ID/indices/label pieces
-                tab_split = line.split("\t")
-                m_id = tab_split[0].strip()
-                idx_split = tab_split[1].split(",")
-                label_val = int(tab_split[2])
+    # Retrieve the one-hot mention/box labels from the file
+    data_dict['labels'] = dict()
+    with open(mention_box_label_file, 'r') as f:
+        for line in f.readlines():
+            line_split = line.strip().split("\t")
+            label_vec = np.zeros([2])
+            label_vec[int(line_split[1].strip())] = 1.0
+            data_dict['labels'][line_split[0].strip()] = label_vec
+        #endfor
+    #endwith
 
-                # Parse the caption ID from the mention ID
-                cap_id = m_id.split(";")[0]
+    # Load the entirety of the box features from the directory
+    # TODO: determine if we need to do the memory-efficient, cpu-inefficient method of loading boxes
+    data_dict['box_features'] = dict()
+    for filename in listdir(box_dir):
+        data_dict['n_box_feats'] = 4095
+        boxes, _, ids = data_util.load_sparse_feats(box_dir + "/" + filename, None, None, 4096)
+        for i in range(0, len(ids)):
+            data_dict['box_features'][ids[i]] = boxes[i]
+    #endfor
 
-                # Store the association between this mention
-                # and its originating caption
-                data_dict['mention_cap_ids'][m_id] = cap_id
-
-                # Store the indices as an integer list
-                indices = list()
-                for i in idx_split:
-                    indices.append(int(i))
-                data_dict['mention_indices'][m_id] = indices
-
-                '''
-                # Create the normalization vectors for each mention, associating
-                # each with 2*n_max_seq 0s, except for indices corresponding
-                # to the mention (twice, because we need both forward and backward);
-                # Since we're averaging the forward and backward outputs of a mention,
-                # we want the norm value to be 1 / 2|m|
-                # NOTE: If we're running into memory problems, we should have one
-                # of these arrays per unique mention, not one per appearance in a mention
-                # pair
-                norm_vec = np.zeros(2 * data_dict['max_seq_len'])
-                norm = 1 / (2 * (1 + indices[1] - indices[0]))
-                for idx in range(indices[0], indices[1]+1):
-                    norm_vec[idx] = norm
-                    norm_vec[data_dict['max_seq_len'] + idx] = norm
-                data_dict['mention_norm_vecs'][m_id] = norm_vec
-                '''
-
-                # Store the label as a one-hot for the binary label
-                label_vec = np.zeros([n_classes])
-                label_vec[label_val] = 1.0
-                data_dict['mention_labels'][m_id] = label_vec
-            #endfor
-        #endwith
-    #endif
-
-    # If feature files have been provided, add those to the data dict too
-    if feats_file is not None and feats_meta_file is not None:
-        meta_dict = None
-        if feats_meta_file is not None:
-            meta_dict = json.load(open(feats_meta_file, 'r'))
-            data_dict['max_feat_idx'] = meta_dict['max_idx']
-        X, _, IDs = data_util.load_sparse_feats(feats_file, meta_dict)
-        data_dict['mention_feats'] = dict()
-        for i in range(0, len(IDs)):
-            data_dict['mention_feats'][IDs[i]] = X[i]
-    #endif
     return data_dict
 #enddef
 
 
-def build_model_file_name(arg_dict, model_type):
+def build_model_filename(arg_dict, task):
     """
     Builds the neural network model file name,
     given an argument dict; any None values are
     omitted from the resulting name
-    :param arg_dict:
-    :param model_type: relation_lstm, nonvis_lstm, relation_ffw, etc.
-    :return:
+    :param arg_dict: Argument dictionary
+    :param task: {rel_intra, rel_cross, nonvis, card, affinity}
+    :return: Model file name
     """
 
     # Set up the root of the model file
-    model_file = arg_dict['data_root']
-    if 'rel_type' in arg_dict and arg_dict['rel_type'] is not None:
-        model_file += "_" + model_type.replace("_", "_" + arg_dict['rel_type'] + "_")
+    if 'data_root' in arg_dict.keys():
+        model_file = arg_dict['data_root']
     else:
-        model_file += "_" + model_type
+        model_file = arg_dict['data'] + "_" + arg_dict['split']
+    if 'rel_type' in arg_dict and arg_dict['rel_type'] is not None:
+        model_file += "_" + task.replace("_", "_" + arg_dict['rel_type'] + "_")
+    else:
+        model_file += "_" + task
 
-    # Add the pair encoding scheme, if this is a relation model
-    if 'pair_enc_scheme' in arg_dict:
-        pair_enc_scheme = arg_dict['pair_enc_scheme']
-        if pair_enc_scheme is not None:
-            if pair_enc_scheme == 'first_avg_last':
-                model_file += "_fal"
-            elif pair_enc_scheme == 'first_last_sentence':
-                model_file += "_fls"
-        #endif
+    # Add the encoding scheme
+    if 'encoding_scheme' in arg_dict:
+        enc_scheme = arg_dict['encoding_scheme']
+        if enc_scheme == "first_last_sentence":
+            model_file += "_fls"
+        elif enc_scheme == "first_last_mention":
+            model_file += "_flm"
     #endif
 
     # Add the standard items that should be present across tasks, if specified
@@ -320,8 +256,8 @@ def build_model_file_name(arg_dict, model_type):
                   "epch" + str(int(arg_dict['epochs'])) + "_" + \
                   "lrn" + str(arg_dict['learn_rate']) + "_" + \
                   "btch" + str(int(arg_dict['batch_size'])) + "_" + \
-                  "drp" + str(int(arg_dict['input_keep_prob'] * 100)) + \
-                  str(int(arg_dict['other_keep_prob'] * 100)) + "_" + \
+                  "drp" + str(int(arg_dict['lstm_input_dropout'] * 100)) + \
+                  str(int(arg_dict['dropout'] * 100)) + "_" + \
                   "lstm" + str(int(arg_dict['lstm_hidden_width'])) + "_" + \
                   "hdn" + str(int(arg_dict['start_hidden_width'])) + "-" + \
                   str(int(arg_dict['hidden_depth'])) + "_" + \
@@ -334,8 +270,9 @@ def build_model_file_name(arg_dict, model_type):
         model_file += "_dataNorm"
     if arg_dict['weighted_classes']:
         model_file += "_weighted"
-    if arg_dict['early_stopping']:
-        model_file += "_early"
+    if 'early_stopping' in arg_dict.keys():
+        if arg_dict['early_stopping']:
+            model_file += "_early"
 
     return model_file + ".model"
 #enddef
@@ -360,73 +297,148 @@ def load_relation_labels(filename):
 #enddef
 
 
-def load_batch_first_last_sentence_mention(mentions, data_dict,
-                                           n_classes, n_embedding_feats=300):
+def load_batch(ids, data_dict, task,
+               n_classes, n_embedding_widths=300):
     """
-    Loads a batch of data, given a list of mentions
-    and the data dictionary. This version of load_batch
-    returns the necessary index matrices for producing a
-        sent_first sent_last m_first m_last
-    mention representation via lstm output tensor transformations
+    Loads a batch of data, given a list of IDs,
+    a data dictionary, the task we're retrieving
+    a batch for, the number of classes, and the
+    width of our word embeddings
+    :param ids: List of mentions, mention pairs,
+                or mention/box pairs
+    :param data_dict: Dictionary of all data
+                      dictionaries (for sentences, etc)
+    :param task: {rel_intra, rel_cross, nonvis,
+                  card, affinity}
+    :param n_classes: Number of classes, for the task
+    :param n_embedding_widths: Width of word embeddings
+    :return: Batch tensors
+    """
 
-    :param mentions: List of mention pair IDs
-    :param data_dict: Dictionary of all data dictionaries (for sentences, etc)
-    :param n_classes: number of possible labels
-    :param n_embedding_feats: size of word embeddings (typically 300)
-    :return: dictionary of batch tensors with aforementioned keys
-    """
+    # Load the batch tensors and size
     batch_tensors = dict()
-    batch_size = len(mentions)
+    batch_size = len(ids)
     n_seq = batch_size
+    if task == "rel_intra":
+        n_seq = batch_size
+    elif task == "rel_cross":
+        n_seq = 2 * batch_size
 
     # Populate our sentence tensor and sequence length array
-    batch_tensors['sentences'] = np.zeros([n_seq, data_dict['max_seq_len'], n_embedding_feats])
+    batch_tensors['sentences'] = np.zeros([n_seq, data_dict['max_seq_len'], n_embedding_widths])
     batch_tensors['seq_lengths'] = np.zeros([n_seq])
+    batch_idx = 0
     for i in range(0, batch_size):
+        id = ids[i]
+        if task == "affinity":
+            id = id.split("|")[0]
+
         # set this sentence idx to the sentence embedding,
         # implicitly padding the end of the sequence with 0s
-        sentence_id = data_dict['mention_cap_ids'][mentions[i]]
-        sentence_matrix = data_dict['sentences'][sentence_id]
-        for j in range(0, len(sentence_matrix)):
-            batch_tensors['sentences'][i][j] = sentence_matrix[j]
-        batch_tensors['seq_lengths'][i] = len(sentence_matrix)
+        # If this is cross-relation prediction, recall that we're
+        # sending two sentences to the lstm for each item
+        sentence_ids = list()
+        if task == "rel_cross":
+            for s_id in data_dict['caption_ids'][id]:
+                sentence_ids.append(s_id)
+        elif task == "rel_intra":
+            sentence_ids.append(data_dict['caption_ids'][id][0])
+        elif task == "nonvis" or task == "card" or task == "affinity":
+            sentence_ids.append(data_dict['caption_ids'][id])
+
+        for sentence_id in sentence_ids:
+            sentence_matrix = data_dict['sentences'][sentence_id]
+            for j in range(0, len(sentence_matrix)):
+                batch_tensors['sentences'][batch_idx][j] = sentence_matrix[j]
+            batch_tensors['seq_lengths'][batch_idx] = len(sentence_matrix)
+            batch_idx += 1
+        #endfor
     #endfor
 
-    # We need four matrices of size [batch_size, 3] corresponding to the
-    # first word of the mention, last word of the mention, the first word
-    # in the sentence, and the last word in the sentence
-    batch_tensors['first_indices'] = np.zeros([batch_size, 3])
-    batch_tensors['last_indices'] = np.zeros([batch_size, 3])
-    batch_tensors['sent_first_indices'] = np.zeros([batch_size, 3])
-    batch_tensors['sent_last_indices'] = np.zeros([batch_size, 3])
-
-    # We also need to account for mention features
-    batch_tensors['mention_feats'] = np.zeros([batch_size, data_dict['max_feat_idx']+1])
-
-    # Iterate through batch_size mentions, storing the appropriate
-    # vectors into the tensors
+    # Load all indices into each batch, and let downstream tasks
+    # worry about how to use those indices with respect to encoding
     batch_tensors['labels'] = np.zeros([batch_size, n_classes])
+    matrix_names = ['first_i_bw', 'first_i_fw', 'last_i_fw',
+                    'last_i_bw', 'sent_last_i_fw',
+                    'sent_first_i_bw', 'first_j_bw',
+                    'last_j_fw', 'first_j_fw', 'last_j_bw',
+                    'sent_last_j_fw', 'sent_first_j_bw']
+    for name in matrix_names:
+        batch_tensors[name] = np.zeros([batch_size, 3])
+
+    # Add the feature matrices
+    if "rel" in task:
+        n_features = len(data_dict['mention_features'][ids[0]])
+        batch_tensors['ij_feats'] = np.zeros([batch_size, n_features])
+    elif task == "affinity":
+        m_id, b_id = ids[0].split("|")
+        batch_tensors['m_feats'] = np.zeros([batch_size,
+                                             len(data_dict['mention_features'][m_id])])
+        batch_tensors['b_feats'] = np.zeros([batch_size,
+                                             len(data_dict['box_features'][b_id])])
+    else:
+        n_features = len(data_dict['mention_features'][ids[0]])
+        batch_tensors['m_feats'] = np.zeros([batch_size, n_features])
+    #endif
+
+    # Iterate through the IDs, loading our data
     for i in range(0, batch_size):
-        m_id = mentions[i]
+        label_id = ids[i]
+        m_id = label_id
+        b_id = None
+        if task == 'affinity':
+            id_split = label_id.split("|")
+            m_id = id_split[0]
+            b_id = id_split[1]
+        #endif
 
-        # Add this pair's label to the label batch
-        batch_tensors['labels'][i] = data_dict['mention_labels'][m_id]
+        batch_tensors['labels'][i] = data_dict['labels'][label_id]
+        # Relation indices are first_i, last_i, first_j, last_j
+        # Other indices are first_i, last_i
+        first_j = None
+        last_j = None
+        if 'rel' in task:
+            first_i, last_i, first_j, last_j = data_dict['mention_indices'][m_id]
+        else:
+            first_i, last_i = data_dict['mention_indices'][m_id]
 
-        # get this mention pair's word indices and caption indices
-        first, last = data_dict['mention_indices'][m_id]
+        # Retrieve the sentence indices, depending on the task
+        if task == 'rel_cross':
+            sent_i = i * 2
+            sent_j = i * 2 + 1
+        else:
+            sent_i = i
+            sent_j = i
+        #endif
 
-        # In this context, we know that the referred-to sentence index
-        # is the batch index, so we can populate indices in the batch tensors
-        batch_tensors['first_indices'][i] = np.array((1, i, first))
-        batch_tensors['last_indices'][i] = np.array((0, i, last))
-        batch_tensors['sent_first_indices'][i] = np.array((1, i, 0))
-        batch_tensors['sent_last_indices'][i] = \
-            np.array((0, i, batch_tensors['seq_lengths'][i] - 1))
+        # Mention indices
+        batch_tensors['first_i_fw'][i] = np.array([0, sent_i, first_i])
+        batch_tensors['first_i_bw'][i] = np.array([1, sent_i, first_i])
+        batch_tensors['last_i_fw'][i] = np.array([0, sent_i, last_i])
+        batch_tensors['last_i_bw'][i] = np.array([1, sent_i, last_i])
+        if first_j is not None:
+            batch_tensors['first_j_fw'][i] = np.array([0, sent_j, first_j])
+            batch_tensors['first_j_bw'][i] = np.array([1, sent_j, first_j])
+        if last_j is not None:
+            batch_tensors['last_j_fw'][i] = np.array([0, sent_j, last_j])
+            batch_tensors['last_j_bw'][i] = np.array([1, sent_j, last_j])
 
-        # Feature arrays, if specified; we don't have to
-        # add anything to the tensors, because they're already 0s
-        if m_id in data_dict['mention_feats']:
-            batch_tensors['mention_feats'][i] = data_dict['mention_feats'][m_id]
+        # Sentence indices
+        batch_tensors['sent_last_i_fw'][i] = \
+            np.array([0, sent_i, batch_tensors['seq_lengths'][sent_i] - 1])
+        batch_tensors['sent_first_i_bw'][i] = np.array([1, sent_i, 0])
+        batch_tensors['sent_last_j_fw'][i] = \
+            np.array([0, sent_j, batch_tensors['seq_lengths'][sent_j] - 1])
+        batch_tensors['sent_first_j_bw'][i] = np.array([1, sent_j, 0])
+
+        if "rel" in task:
+            batch_tensors['ij_feats'][i] = data_dict['mention_features'][m_id]
+        else:
+            batch_tensors['m_feats'][i] = data_dict['mention_features'][m_id]
+
+        if task == 'affinity':
+            batch_tensors['b_feats'][i] = data_dict['box_features'][b_id]
     #endfor
+
     return batch_tensors
 #enddef

@@ -3,23 +3,32 @@ import json
 from argparse import ArgumentParser
 from os.path import abspath, expanduser
 
-import mord
+from sklearn.linear_model import LogisticRegression
 from scipy import stats
-from utils.LogUtil import LogUtil
-
-from utils import icl_util as util, icl_data_util
+from utils.Logger import Logger
+from utils import core as util
+from utils import data as data_util
 from utils.ScoreDict import ScoreDict
 
-"""
-Trains the cardinality classifier as a multinomial logistic regression
-model with max_iter iterations; optional parameters enable balanced class
-weights, warm start, and the ability to ignore features
-"""
+
 def train(max_iter, balance=False, warm_start=None, ignored_feats=set()):
+    """
+    Trains the cardinality classifier as a multinomial logistic regression
+    model with max_iter iterations; optional parameters enable balanced class
+    weights, warm start, and the ability to ignore features
+    :param max_iter:
+    :param balance:
+    :param warm_start:
+    :param ignored_feats:
+    :return:
+    """
     global log, train_file, meta_dict, model_file
 
     log.tic('info', "Loading training data")
-    x, y, ids = icl_data_util.load_sparse_feats(train_file, meta_dict, ignored_feats, log)
+    x, y, ids = \
+        data_util.load_very_sparse_feats(train_file,
+                                         meta_dict,
+                                         ignored_feats)
     log.toc('info')
 
     log.tic('info', "Training")
@@ -28,11 +37,12 @@ def train(max_iter, balance=False, warm_start=None, ignored_feats=set()):
         class_weight = 'balanced'
     #endif
 
-    '''
-    learner = LogisticRegression(class_weight=class_weight, solver='lbfgs',
-              max_iter=max_iter, multi_class='multinomial', n_jobs=-1, warm_start=warm_start)
-    '''
-    learner = mord.OrdinalRidge(max_iter=max_iter)
+    learner = LogisticRegression(class_weight=class_weight,
+                                 solver='lbfgs',
+                                 max_iter=max_iter,
+                                 multi_class='multinomial',
+                                 n_jobs=-1, warm_start=warm_start)
+    #learner = mord.OrdinalRidge(max_iter=max_iter)
 
     learner.fit(x, y)
     log.toc('info')
@@ -42,18 +52,23 @@ def train(max_iter, balance=False, warm_start=None, ignored_feats=set()):
         cPickle.dump(learner, pickle_file)
 #enddef
 
-"""
-Evaluates the model, optionally ignoring features and saving
-predicted class scores
-"""
+
 def evaluate(ignored_feats=set()):
+    """
+    Evaluates the model, optionally ignoring features and saving
+    predicted class scores
+    :param ignored_feats:
+    :return:
+    """
     global log, eval_file, model_file, scores_file
 
     log.info("Loading model from file")
     learner = cPickle.load(open(model_file, 'r'))
 
     log.info("Loading eval data")
-    x_eval, y_eval, ids_eval = icl_data_util.load_sparse_feats(eval_file, meta_dict, ignored_feats, log)
+    x_eval, y_eval, ids_eval = \
+        data_util.load_very_sparse_feats(eval_file, meta_dict,
+                                         ignored_feats)
 
     log.info("Evaluating")
     y_pred_probs = learner.predict_log_proba(x_eval)
@@ -97,12 +112,7 @@ def evaluate(ignored_feats=set()):
 #enddef
 
 
-
-
-
-
-
-log = LogUtil(lvl='debug', delay=45)
+log = Logger(lvl='debug', delay=45)
 
 #Parse arguments
 parser = ArgumentParser("ImageCaptionLearn_py: Box Cardinality Classifier")
@@ -142,7 +152,7 @@ ablation_file = arg_dict['ablation_file']
 ablation_groups = None
 if ablation_file is not None:
     ablation_file = abspath(expanduser(ablation_file))
-    ablation_groups = icl_data_util.load_ablation_file(ablation_file)
+    ablation_groups = data_util.load_ablation_file(ablation_file)
 
 # Parse the other args
 max_iter = arg_dict['max_iter']

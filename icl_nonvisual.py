@@ -9,22 +9,33 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
-from utils.LogUtil import LogUtil
-
-from utils import icl_util as util, icl_data_util
+from utils.Logger import Logger
+from utils import core as util
+from utils import data as data_util
 from utils.ScoreDict import ScoreDict
 
-#from icl_affinity import load_cca_data
 
-"""
-Trains the model
-"""
 def train(model, balance, max_iter=None, max_depth=None,
-          num_estimators=None, warm_start=None, ignored_feats=set()):
+          num_estimators=None, warm_start=None,
+          ignored_feats=set()):
+    """
+    Trains the model
+    :param model:
+    :param balance:
+    :param max_iter:
+    :param max_depth:
+    :param num_estimators:
+    :param warm_start:
+    :param ignored_feats:
+    :return:
+    """
     global log, train_file, meta_dict, model_file
 
     log.tic('info', "Loading training data")
-    x, y, ids = icl_data_util.load_sparse_feats(train_file, meta_dict, ignored_feats, log)
+    x, y, ids = \
+        data_util.load_very_sparse_feats(train_file,
+                                         meta_dict,
+                                         ignored_feats)
 
     log.toc('info')
 
@@ -52,17 +63,26 @@ def train(model, balance, max_iter=None, max_depth=None,
         cPickle.dump(learner, pickle_file)
 #enddef
 
-"""
-Evaluates the model against the eval data
-"""
-def evaluate(lemma_file=None, hyp_file=None, ignored_feats=set(), save_scores=True):
+
+def evaluate(lemma_file=None, hyp_file=None,
+             ignored_feats=set(), save_scores=True):
+    """
+    Evaluates the model against the eval data
+    :param lemma_file:
+    :param hyp_file:
+    :param ignored_feats:
+    :param save_scores:
+    :return:
+    """
     global log, eval_file, model_file, scores_file
 
     log.info("Loading model from file")
     learner = cPickle.load(open(model_file, 'r'))
 
     log.info("Loading eval data")
-    x_eval, y_eval, ids_eval = icl_data_util.load_sparse_feats(eval_file, meta_dict, ignored_feats, log)
+    x_eval, y_eval, ids_eval = \
+        data_util.load_very_sparse_feats(eval_file, meta_dict,
+                                         ignored_feats)
 
     lemma_dict = dict()
     lemmas = set()
@@ -178,7 +198,7 @@ def evaluate(lemma_file=None, hyp_file=None, ignored_feats=set(), save_scores=Tr
 
     log.info("---Scores---")
     for label in scores.keys:
-        print str(label) + "\t" + scores.get_score(label).toString() + " - %d (%.2f%%)" % \
+        print str(label) + "\t" + scores.get_score(label).to_string() + " - %d (%.2f%%)" % \
                                                                        (scores.get_gold_count(label), scores.get_gold_percent(label))
     log.info(None, "Accuracy: %.2f%%", scores.get_accuracy())
 
@@ -192,11 +212,13 @@ def evaluate(lemma_file=None, hyp_file=None, ignored_feats=set(), save_scores=Tr
     #endif
 #enddef
 
+'''
+def __DEP__nonvis_with_grounding(max_iter):
+    """
 
-"""
-
-"""
-def nonvis_with_grounding(max_iter):
+    :param max_iter:
+    :return:
+    """
     global eval_file, meta_dict, log
 
     ### Affinity ###
@@ -309,12 +331,14 @@ def nonvis_with_grounding(max_iter):
 
     log.info("---Scores---")
     for label in scores.keys:
-        print str(label) + "\t" + scores.get_score(label).toString() + " - %d (%.2f%%)" % \
+        print str(label) + "\t" + scores.get_score(label).to_string() + " - %d (%.2f%%)" % \
                                                                        (scores.get_gold_count(label), scores.get_gold_percent(label))
     log.info(None, "Accuracy: %.2f%%", scores.get_accuracy())
 #enddef
+'''
 
-log = LogUtil(lvl='debug', delay=45)
+
+log = Logger(lvl='debug', delay=45)
 
 models = ['svm', 'logistic', 'decision_tree', 'random_forest']
 parser = ArgumentParser("ImageCaptionLearn_py: Nonvisual Mention Classifier")
@@ -356,7 +380,7 @@ ablation_file = arg_dict['ablation_file']
 ablation_groups = None
 if ablation_file is not None:
     ablation_file = abspath(expanduser(ablation_file))
-    ablation_groups = icl_data_util.load_ablation_file(ablation_file)
+    ablation_groups = data_util.load_ablation_file(ablation_file)
 
 # Parse the other args
 model_type = arg_dict['model']

@@ -5,13 +5,19 @@ from os.path import abspath, expanduser, isfile
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 
-from utils import icl_util as util
-from utils.LogUtil import LogUtil
+from utils import core as util
+from utils.Logger import Logger
 
-"""
-Loads cca data from file as an (ids, x, y) tuple
-"""
+
 def load_cca_data(id_file, scores_file, label_file, type_file):
+    """
+    Loads cca data from file as an (ids, x, y) tuple
+    :param id_file:
+    :param scores_file:
+    :param label_file:
+    :param type_file:
+    :return:
+    """
     # load the data into dictionaries indexed by ID
     ids = list()
     with open(id_file, 'r') as f:
@@ -67,10 +73,11 @@ def load_cca_data(id_file, scores_file, label_file, type_file):
 #enddef
 
 
-"""
-Loads the nonvisual mention IDs from the nonvis file
-"""
 def load_nonvis_ids():
+    """
+    Loads the nonvisual mention IDs from the nonvis file
+    :return:
+    """
     global nonvis_file
     ids_nonvis_gold = set()
     with open(nonvis_file, 'r') as f:
@@ -86,7 +93,8 @@ def load_nonvis_ids():
     return ids_nonvis_gold
 #enddef
 
-log = LogUtil(lvl='debug', delay=45)
+
+log = Logger(lvl='debug', delay=45)
 
 # Parse args
 parser = ArgumentParser("ImageCaptionLearn_py: Affinity Classifier")

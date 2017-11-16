@@ -1,35 +1,41 @@
 import math
 import os
 from argparse import ArgumentParser
+from os.path import abspath, expanduser
 
 import numpy as np
 import tensorflow as tf
 
-from nn_utils import core as nn_util
 from nn_utils import data as nn_data
 from nn_utils import eval as nn_eval
+from nn_utils import core as nn_util
 from utils import core as util
 from utils.Logger import Logger
 
 ___author___ = "ccervantes"
 
 N_EMBEDDING_WIDTH = 300
-CLASSES = ['n', 'c', 'b', 'p']
-RELATION_TYPES = ['intra', 'cross']
+CLASSES_VISUAL = ['v', 'n']
+CLASSES_CARD = ['0', '1', '2', '3', '4', '5',
+                '6', '7', '8', '9', '10', '11+']
 
 
-def train(rel_type, encoding_scheme, embedding_type,
+def train(task, encoding_scheme, embedding_type,
           sentence_file, mention_idx_file, feature_file,
           feature_meta_file, epochs, batch_size, lstm_hidden_width,
           start_hidden_width, hidden_depth, weighted_classes,
           lstm_input_dropout, dropout, lrn_rate,
-          adam_epsilon, clip_norm, data_norm, activation, model_file=None,
-          eval_sentence_file=None, eval_mention_idx_file=None,
+          adam_epsilon, clip_norm, data_norm, activation,
+          model_file=None, eval_sentence_file=None,
+          eval_mention_idx_file=None,
           eval_feature_file=None, eval_feature_meta_file=None,
-          eval_label_file=None, early_stopping=False, log=None):
+          early_stopping=False, log=None):
     """
-    Trains a relation model
+    Trains a nonvis or cardinality model
 
+    :param task: {nonvis, card}
+    :param encoding_scheme: {first_last_sentence, first_last_mention}
+    :param embedding_type: {w2v, glove}
     :param sentence_file: File with captions
     :param mention_idx_file: File with mention pair word indices
     :param feature_file: File with sparse mention pair features
@@ -54,39 +60,34 @@ def train(rel_type, encoding_scheme, embedding_type,
                                should be evaluated
     :param eval_mention_idx_file: Mention index file against which
                                   the model should be evaluated
-    :param eval_label_file: Relation label file for eval data
     :return:
     """
-    global CLASSES
+    global CLASSES_CARD, CLASSES_VISUAL
 
-    task = "rel_" + rel_type
-    n_classes = len(CLASSES)
+    # Retrieve the correct set of classes
+    classes = None
+    if task == 'nonvis':
+        classes = CLASSES_VISUAL
+    elif task == 'card':
+        classes = CLASSES_CARD
+    n_classes = len(classes)
 
     log.info("Loading data from " + sentence_file + " and " + mention_idx_file)
     data_dict = nn_data.load_sentences(sentence_file, embedding_type)
     data_dict.update(nn_data.load_mentions(mention_idx_file, task,
                                            feature_file, feature_meta_file,
                                            n_classes))
+
     log.info("Loading data from " + eval_sentence_file + " and " + eval_mention_idx_file)
     eval_data_dict = nn_data.load_sentences(eval_sentence_file, embedding_type)
     eval_data_dict.update(nn_data.load_mentions(eval_mention_idx_file, task,
-                                                eval_feature_file,
-                                                eval_feature_meta_file,
+                                                eval_feature_file, eval_feature_meta_file,
                                                 n_classes))
+
     mentions = list(data_dict['mention_indices'].keys())
     n_pairs = len(mentions)
 
-    # Load the gold labels from the label file once, and we can just reuse them every epoch
-    gold_label_dict = nn_data.load_relation_labels(eval_label_file)
-
-    # We want to keep track of the best coref and subset scores, along
-    # with the epoch that they originated from
-    best_coref_subset_avg = -1
-    best_coref_subset_epoch = -1
-
     log.info("Setting up network architecture")
-
-    # Set up the bidirectional LSTM
     with tf.variable_scope('bidirectional_lstm'):
         nn_util.setup_bidirectional_lstm(lstm_hidden_width, data_norm)
     nn_util.setup_core_architecture(task, encoding_scheme,
@@ -98,6 +99,11 @@ def train(rel_type, encoding_scheme, embedding_type,
     nn_util.add_train_op(loss, lrn_rate, adam_epsilon, clip_norm)
     train_op = tf.get_collection('train_op')[0]
     nn_util.dump_tf_vars()
+
+    # We want to keep track of the best scores with
+    # the epoch that they originated from
+    best_avg_score = -1
+    best_epoch = -1
 
     log.info("Training")
     saver = tf.train.Saver(max_to_keep=100)
@@ -124,8 +130,8 @@ def train(rel_type, encoding_scheme, embedding_type,
 
                 # Retrieve this batch
                 batch_mentions = mentions[start_idx:end_idx]
-                batch_tensors = nn_data.load_batch(batch_mentions, data_dict,
-                                                   task, n_classes, N_EMBEDDING_WIDTH)
+                batch_tensors = nn_data.load_batch(batch_mentions, data_dict, task,
+                                                   n_classes, N_EMBEDDING_WIDTH)
 
                 # Train
                 nn_util.run_op(sess, train_op, [batch_tensors], lstm_input_dropout,
@@ -135,12 +141,10 @@ def train(rel_type, encoding_scheme, embedding_type,
                 if (j+1) % 100 == 0:
                     losses.append(nn_util.run_op(sess, loss, [batch_tensors],
                                                  lstm_input_dropout, dropout,
-                                                 encoding_scheme, [task],
-                                                 [""], True))
+                                                 encoding_scheme, [task], [""], True))
                     accuracies.append(nn_util.run_op(sess, accuracy, [batch_tensors],
                                                      lstm_input_dropout, dropout,
-                                                     encoding_scheme, [task],
-                                                     [""], True))
+                                                     encoding_scheme, [task], [""], True))
                 #endif
                 start_idx = end_idx
                 end_idx = start_idx + batch_size
@@ -152,35 +156,41 @@ def train(rel_type, encoding_scheme, embedding_type,
                      100.0 * sum(accuracies) / float(len(accuracies)))
             saver.save(sess, model_file)
             if eval_sentence_file is not None and eval_mention_idx_file is not None:
-                eval_mention_pairs = eval_data_dict['mention_indices'].keys()
-                pred_scores, _ = nn_util.get_pred_scores_mcc(task, encoding_scheme,
-                                                             sess, batch_size,
-                                                             eval_mention_pairs,
-                                                             eval_data_dict,
-                                                             n_classes, N_EMBEDDING_WIDTH,
-                                                             log)
+                eval_mentions = eval_data_dict['mention_indices'].keys()
+                pred_scores, gold_label_dict = \
+                    nn_util.get_pred_scores_mcc(task, encoding_scheme,
+                                                sess, batch_size, eval_mentions,
+                                                eval_data_dict, n_classes,
+                                                N_EMBEDDING_WIDTH, log)
+
+                # If we do an argmax on the scores, we get the predicted labels
+                eval_mentions = list(pred_scores.keys())
                 pred_labels = list()
-                for pair in eval_mention_pairs:
-                    pred_labels.append(np.argmax(pred_scores[pair]))
+                gold_labels = list()
+                for m in eval_mentions:
+                    pred_labels.append(np.argmax(pred_scores[m]))
+                    gold_labels.append(np.argmax(gold_label_dict[m]))
+                #endfor
 
                 # Evaluate the predictions
-                score_dict = nn_eval.evaluate_relations(eval_mention_pairs, pred_labels, gold_label_dict)
+                score_dict = nn_eval.evaluate_multiclass(gold_labels, pred_labels, classes, log)
 
-                # Get the current coref / subset and see if their average beats our best
-                coref_subset_avg = score_dict.get_score('coref').f1 + score_dict.get_score('subset').f1
-                coref_subset_avg /= 2.0
-                if coref_subset_avg >= best_coref_subset_avg - 0.005:
-                    log.info(None, "Previous best coref/subset average F1 of %.2f%% after %d epochs",
-                             100.0 * best_coref_subset_avg, best_coref_subset_epoch)
-                    best_coref_subset_avg = coref_subset_avg
-                    best_coref_subset_epoch = i
+                # Get the current scores and see if their average beats our best
+                # by half a point (if we're stopping early)
+                avg = score_dict.get_score(0).f1 + score_dict.get_score(1).f1
+                avg /= 2.0
+                if avg >= best_avg_score - 0.005:
+                    log.info(None, "Previous best score average F1 of %.2f%% after %d epochs",
+                             100.0 * best_avg_score, best_epoch)
+                    best_avg_score = avg
+                    best_epoch = i
                     log.info(None, "New best at current epoch (%.2f%%)",
-                             100.0 * best_coref_subset_avg)
+                             100.0 * best_avg_score)
                 #endif
 
                 # Implement early stopping; if it's been 10 epochs since our best, stop
-                if early_stopping and i >= (best_coref_subset_epoch + 10):
-                    log.info(None, "Stopping early; best scores at %d epochs", best_coref_subset_epoch)
+                if early_stopping and i >= (best_epoch + 10):
+                    log.info(None, "Stopping early; best scores at %d epochs", best_epoch)
                     break
                 #endif
             #endif
@@ -191,55 +201,42 @@ def train(rel_type, encoding_scheme, embedding_type,
 #enddef
 
 
-def predict(rel_type, encoding_scheme, embedding_type,
+def predict(task, encoding_scheme, embedding_type,
             tf_session, batch_size, sentence_file,
             mention_idx_file, feature_file,
-            feature_meta_file, label_file, scores_file=None, log=None):
-    """
-    Wrapper for making predictions on a pre-trained model, already loaded into
-    the session
-    :param tf_session:
-    :param batch_size:
-    :param sentence_file:
-    :param mention_idx_file:
-    :param feature_file:
-    :param feature_meta_file:
-    :param label_file:
-    :param scores_file:
-    :return:
-    """
-    global CLASSES
-    n_classes = len(CLASSES)
-    task = "rel_" + rel_type
+            feature_meta_file, scores_file=None, log=None):
+    global CLASSES_CARD, CLASSES_VISUAL
+
+    classes = None
+    if task == 'nonvis':
+        classes = CLASSES_VISUAL
+    elif task == 'card':
+        classes = CLASSES_CARD
+    n_classes = len(classes)
 
     # Load the data
     log.info("Loading data from " + sentence_file + " and " + mention_idx_file)
     data_dict = nn_data.load_sentences(sentence_file, embedding_type)
-    data_dict.update(nn_data.load_mentions(mention_idx_file, task,
-                                           feature_file, feature_meta_file, n_classes))
+    data_dict.update(nn_data.load_mentions(mention_idx_file, task, feature_file,
+                                           feature_meta_file, n_classes))
 
     # Get the predicted scores, given our arguments
-    log.info("Predictiong scores")
-    mention_pairs = data_dict['mention_indices'].keys()
-    pred_scores, _ = nn_util.get_pred_scores_mcc(task, encoding_scheme,
-                                                 tf_session, batch_size,
-                                                 mention_pairs, data_dict,
-                                                 n_classes, N_EMBEDDING_WIDTH,
-                                                 log)
-
-    # log.warning("Skipping evaluation, since it takes way too long right now for some reason")
-    log.info("Loading data from " + label_file)
-    gold_label_dict = nn_data.load_relation_labels(label_file)
+    mentions = data_dict['mention_indices'].keys()
+    pred_scores, gold_label_dict = \
+        nn_util.get_pred_scores_mcc(task, encoding_scheme, tf_session,
+                                    batch_size, mentions, data_dict,
+                                    n_classes, N_EMBEDDING_WIDTH, log)
 
     # If we do an argmax on the scores, we get the predicted labels
-    log.info("Getting labels from scores")
     pred_labels = list()
-    for pair in mention_pairs:
-        pred_labels.append(np.argmax(pred_scores[pair]))
+    gold_labels = list()
+    for m in mentions:
+        pred_labels.append(np.argmax(pred_scores[m]))
+        gold_labels.append(np.argmax(gold_label_dict[m]))
+    #endfor
 
     # Evaluate the predictions
-    log.info("Evaluating against the gold")
-    nn_eval.evaluate_relations(mention_pairs, pred_labels, gold_label_dict, log)
+    nn_eval.evaluate_multiclass(gold_labels, pred_labels, classes, log)
 
     # If a scores file was specified, write the scores
     log.info("Writing scores file")
@@ -258,32 +255,33 @@ def predict(rel_type, encoding_scheme, embedding_type,
 
 
 def __init__():
-    # Set up the global logger
+    # Set up the logger
     log = Logger('debug', 180)
 
-
     # Parse arguments
-    parser = ArgumentParser("ImageCaptionLearn_py: Neural Network for Relation "
-                            "Prediction; Bidirectional LSTM to hidden layer "
-                            "to softmax over (n)ull, (c)oreference, su(b)set, "
-                            "and su(p)erset labels")
+    parser = ArgumentParser("ImageCaptionLearn_py: Core Neural "
+                            "Network classification architecture; "
+                            "used for nonvis and cardinality prediction")
     parser.add_argument("--epochs", type=int, default=20,
-                        help="train opt; number of times to iterate over the dataset")
+                        help="train opt; number of times to "
+                             "iterate over the dataset")
     parser.add_argument("--batch_size", type=int, default=100,
-                        help="train opt; number of random mention pairs per batch")
+                        help="train opt; number of random mention "
+                             "pairs per batch")
     parser.add_argument("--lstm_hidden_width", type=int, default=200,
-                        help="train opt; number of hidden units within "
-                             "the LSTM cells")
+                        help="train opt; number of hidden units "
+                             "within the LSTM cells")
     parser.add_argument("--start_hidden_width", type=int, default=150,
-                        help="train opt; number of hidden units in the "
-                             "layer after the LSTM")
+                        help="train opt; number of hidden units "
+                             "in the layer after the LSTM")
     parser.add_argument("--hidden_depth", type=int, default=1,
-                        help="train opt; number of hidden layers after the "
-                             "lstm, where each is last_width/2 units wide, "
-                             "starting with start_hidden_width")
+                        help="train opt; number of hidden layers "
+                             "after the lstm, where each is "
+                             "last_width/2 units wide, starting "
+                             "with start_hidden_width")
     parser.add_argument("--weighted_classes", action="store_true",
-                        help="Whether to inversely weight the classes "
-                             "in the loss")
+                        help="Whether to inversely weight the "
+                             "classes in the loss")
     parser.add_argument("--learn_rate", type=float, default=0.001,
                         help="train opt; optimizer learning rate")
     parser.add_argument("--adam_epsilon", type=float, default=1e-08,
@@ -296,10 +294,6 @@ def __init__():
                         help="train opt; probability to keep lstm input nodes")
     parser.add_argument("--dropout", type=float, default=1.0,
                         help="train opt; probability to keep all other nodes")
-    parser.add_argument("--encoding_scheme",
-                        choices=["first_last_sentence", 'first_last_mention'],
-                        default="first_last_sentence",
-                        help="train opt; specifies how lstm outputs are transformed")
     parser.add_argument("--data_dir", required=True,
                         type=lambda f: util.arg_path_exists(parser, f),
                         help="Directory containing raw/, feats/, and scores/ directories")
@@ -313,23 +307,23 @@ def __init__():
                         help='train opt; which nonlinear activation function to use')
     parser.add_argument("--predict", action='store_true',
                         help='Predicts using pre-trained model')
-    parser.add_argument("--rel_type", choices=['intra', 'cross'], required=True,
-                        help="Whether we're dealing with intra-caption or "
-                             "cross-caption relations")
-    parser.add_argument("--model_file", #required=True,
-                        type=str, help="Model file to save/load")
+    parser.add_argument("--model_file", type=str, help="Model file to save/load")
     parser.add_argument("--embedding_type", choices=['w2v', 'glove'], default='w2v',
                         help="Word embedding type to use")
     parser.add_argument("--early_stopping", action='store_true',
                         help="Whether to implement early stopping based on the "+
                              "evaluation performance")
+    parser.add_argument("--encoding_scheme",
+                        choices=['first_last_sentence', 'first_last_mention'],
+                        default='first_last_mention')
+    parser.add_argument("--task", required=True, choices=['nonvis', 'card'])
     args = parser.parse_args()
     arg_dict = vars(args)
 
-    rel_type = arg_dict['rel_type']
+    task = arg_dict['task']
     if arg_dict['train']:
         arg_dict['model_file'] = "/home/ccervan2/models/tacl201712/" + \
-                                    nn_data.build_model_filename(arg_dict, "rel_lstm")
+                                 nn_data.build_model_filename(arg_dict, task + "_lstm")
     model_file = arg_dict['model_file']
     util.dump_args(arg_dict, log)
 
@@ -338,16 +332,15 @@ def __init__():
     data_root = arg_dict['data_root']
     eval_data_root = arg_dict['eval_data_root']
     sentence_file = data_dir + "raw/" + data_root + "_captions.txt"
-    mention_idx_file = data_dir + "raw/" + data_root + "_mentionPairs_" + rel_type + ".txt"
-    feature_file = data_dir + "feats/" + data_root + "_relation.feats"
-    feature_meta_file = data_dir + "feats/" + data_root + "_relation_meta.json"
-    label_file = data_dir + "raw/" + data_root + "_mentionPair_labels.txt"
+    mention_idx_file = data_dir + "raw/" + data_root + "_mentions_" + task + ".txt"
+    feature_file = data_dir + "feats/" + data_root + "_" + task + ".feats"
+    feature_meta_file = data_dir + "feats/" + data_root + "_" + task + "_meta.json"
     if eval_data_root is not None:
         eval_sentence_file = data_dir + "raw/" + eval_data_root + "_captions.txt"
-        eval_mention_idx_file = data_dir + "raw/" + eval_data_root + "_mentionPairs_" + rel_type + ".txt"
-        eval_feature_file = data_dir + "feats/" + eval_data_root + "_relation.feats"
-        eval_feature_meta_file = data_dir + "feats/" + eval_data_root + "_relation_meta.json"
-        eval_label_file = data_dir + "raw/" + eval_data_root + "_mentionPair_labels.txt"
+        eval_mention_idx_file = data_dir + "raw/" + eval_data_root + "_mentions_" + task + ".txt"
+        eval_feature_file = data_dir + "feats/" + eval_data_root + "_" + task + ".feats"
+        eval_feature_meta_file = data_dir + "feats/" + eval_data_root + "_" + task + "_meta.json"
+    #endif
 
     # Load the appropriate word embeddings
     embedding_type = arg_dict['embedding_type']
@@ -367,8 +360,7 @@ def __init__():
 
     # Train, if training was specified
     if arg_dict['train']:
-        train(rel_type=rel_type,
-              encoding_scheme=arg_dict['encoding_scheme'],
+        train(task=task, encoding_scheme=arg_dict['encoding_scheme'],
               embedding_type=embedding_type,
               sentence_file=sentence_file,
               mention_idx_file=mention_idx_file,
@@ -388,27 +380,27 @@ def __init__():
               eval_mention_idx_file=eval_mention_idx_file,
               eval_feature_file=eval_feature_file,
               eval_feature_meta_file=eval_feature_meta_file,
-              eval_label_file=eval_label_file,
-              early_stopping=arg_dict['early_stopping'], log=log)
+              early_stopping=arg_dict['early_stopping'],
+              log=log)
     elif arg_dict['predict']:
-        scores_file = data_dir + "scores/" + data_root + \
-                      "_relation_" + rel_type + ".scores"
+        scores_file = data_dir + "scores/" + data_root + "_nonvis.scores"
 
         # Restore our variables
         tf.reset_default_graph()
         with tf.Session() as sess:
             saver = tf.train.import_meta_graph(model_file + ".meta")
             saver.restore(sess, model_file)
-            predict(rel_type=rel_type,
-                    encoding_scheme=arg_dict['encoding_scheme'],
+
+            predict(task=task, encoding_scheme=arg_dict['encoding_scheme'],
                     embedding_type=embedding_type,
                     tf_session=sess, batch_size=arg_dict['batch_size'],
                     sentence_file=sentence_file,
                     mention_idx_file=mention_idx_file,
-                    feature_file=feature_file, feature_meta_file=feature_meta_file,
-                    label_file=label_file, scores_file=scores_file, log=log)
-        #endwith
-    #endif
+                    feature_file=feature_file,
+                    feature_meta_file=feature_meta_file,
+                    scores_file=scores_file, log=log)
+            #endwith
+        #endif
 #enddef
 
 

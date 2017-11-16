@@ -5,19 +5,31 @@ from os.path import abspath, expanduser
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import normalize
-from utils.LogUtil import LogUtil
-
-from utils import icl_util as util, icl_data_util
+from utils.Logger import Logger
+from utils import core as util
+from utils import data as data_util
 from utils.ScoreDict import ScoreDict
 
-"""
-Trains the relation model as a multinomial logistic regression model
-"""
-def train(solver, max_iter, balance, norm, warm_start, multiclass_mode, ignored_feats=set()):
+
+def train(solver, max_iter, balance, norm, warm_start,
+          multiclass_mode, ignored_feats=set()):
+    """
+    Trains the relation model as a multinomial logistic regression model
+    :param solver:
+    :param max_iter:
+    :param balance:
+    :param norm:
+    :param warm_start:
+    :param multiclass_mode:
+    :param ignored_feats:
+    :return:
+    """
     global log, meta_dict, train_file, model_file
 
     log.tic('info', "Loading training data")
-    x, y, ids = icl_data_util.load_sparse_feats(train_file, meta_dict, ignored_feats, log)
+    x, y, ids = \
+        data_util.load_very_sparse_feats(train_file, meta_dict,
+                                         ignored_feats)
     if norm is not None:
         normalize(x, norm=norm, copy=False)
     log.toc('info')
@@ -38,10 +50,13 @@ def train(solver, max_iter, balance, norm, warm_start, multiclass_mode, ignored_
         cPickle.dump(logistic, pickle_file)
 #enddef
 
-"""
-Saves predicted scores to file
-"""
+
 def save_scores(ignored_feats=set()):
+    """
+    Saves predicted scores to file
+    :param ignored_feats:
+    :return:
+    """
     global log, eval_file, model_file, scores_file, meta_dict
 
     log.info("Loading model from file")
@@ -49,8 +64,8 @@ def save_scores(ignored_feats=set()):
 
     log.info("Loading eval data")
     x_eval, y_eval, ids_eval = \
-        icl_data_util.load_sparse_feats(eval_file, meta_dict,
-                                        ignored_feats, log)
+        data_util.load_very_sparse_feats(eval_file, meta_dict,
+                                         ignored_feats)
 
     log.info("Predicting scores")
     y_pred_probs = learner.predict_log_proba(x_eval)
@@ -67,10 +82,14 @@ def save_scores(ignored_feats=set()):
     #endwith
 #enddef
 
-"""
-Evaluates the saved model against the eval file
-"""
+
 def evaluate(norm, ignored_feats=set()):
+    """
+    Evaluates the saved model against the eval file
+    :param norm:
+    :param ignored_feats:
+    :return:
+    """
     global log, eval_file, model_file, nonvis_file, scores_file, meta_dict
 
     log.info("Loading model from file")
@@ -78,8 +97,8 @@ def evaluate(norm, ignored_feats=set()):
 
     log.info("Loading eval data")
     x_eval, y_eval, ids_eval = \
-        icl_data_util.load_sparse_feats(eval_file, meta_dict,
-                                        ignored_feats, log)
+        data_util.load_very_sparse_feats(eval_file, meta_dict,
+                                         ignored_feats)
     if norm is not None:
         normalize(x_eval, norm=norm, copy=False)
     #endif
@@ -140,7 +159,7 @@ def evaluate(norm, ignored_feats=set()):
 
     log.info("---Scores---")
     for label in scores.keys:
-        print str(label) + "\t" + scores.get_score(label).toString() + " - %d (%.2f%%)" % \
+        print str(label) + "\t" + scores.get_score(label).to_string() + " - %d (%.2f%%)" % \
                                                                        (scores.get_gold_count(label), scores.get_gold_percent(label))
     #endfor
 
@@ -159,10 +178,12 @@ def evaluate(norm, ignored_feats=set()):
     print "Acc: " + str(scores.get_accuracy()) + "%"
 #enddef
 
-"""
-Loads nonvisual IDs
-"""
+
 def load_nonvis_ids():
+    """
+    Loads nonvisual IDs
+    :return:
+    """
     global nonvis_file
     ids_nonvis_gold = set()
     with open(nonvis_file, 'r') as f:
@@ -179,15 +200,18 @@ def load_nonvis_ids():
 #enddef
 
 
-"""
-Tunes the parameters over the model
-"""
 def tune():
+    """
+    Tunes the parameters over the model
+    :return:
+    """
     global train_file, eval_file, meta_dict
 
     log.tic('info', 'Loading data')
-    x_train, y_train, ids_train = icl_data_util.load_sparse_feats(train_file, meta_dict['max_idx'], log)
-    x_eval, y_eval, ids_eval = icl_data_util.load_sparse_feats(eval_file, meta_dict['max_idx'], log)
+    x_train, y_train, ids_train = \
+        data_util.load_very_sparse_feats(train_file, meta_dict)
+    x_eval, y_eval, ids_eval = \
+        data_util.load_very_sparse_feats(eval_file, meta_dict)
     ids_nonvis_gold = load_nonvis_ids()
     log.toc('info')
 
@@ -236,7 +260,7 @@ def tune():
 
                     log.info("---Scores---")
                     for label in scores.keys:
-                        print str(label) + "\t" + scores.get_score(label).toString() + " - %d (%.2f%%)" % \
+                        print str(label) + "\t" + scores.get_score(label).to_string() + " - %d (%.2f%%)" % \
                                                                                        (scores.get_gold_count(label), scores.get_gold_percent(label))
                     #endfor
                 #endfor
@@ -247,7 +271,7 @@ def tune():
 
 # At one time I had more arguments, but in the end it's much
 # easier not to specify all this on the command line
-log = LogUtil(lvl='debug', delay=45)
+log = Logger(lvl='debug', delay=45)
 
 # Parse what arguments remain
 solvers = ['lbfgs', 'newton-cg', 'sag']
@@ -296,7 +320,7 @@ ablation_file = arg_dict['ablation_file']
 ablation_groups = None
 if ablation_file is not None:
     ablation_file = abspath(expanduser(ablation_file))
-    ablation_groups = icl_data_util.load_ablation_file(ablation_file)
+    ablation_groups = data_util.load_ablation_file(ablation_file)
 nonvis_file = arg_dict['nonvis_file']
 meta_nonvis_file = None
 if nonvis_file is not None:

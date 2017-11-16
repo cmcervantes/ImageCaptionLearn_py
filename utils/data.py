@@ -111,7 +111,7 @@ def load_very_sparse_feats(filename, meta_dict=None, ignored_feats=None):
 #enddef
 
 
-def load_sparse_feats(filename, meta_dict, ignored_feats=None):
+def load_sparse_feats(filename, meta_dict=None, ignored_feats=None, n_features=None):
     """
     Loads the given sparse feature data into a sparse numpy matrix,
     returning (x, y, ids) tuple; this should be more efficient
@@ -142,9 +142,14 @@ def load_sparse_feats(filename, meta_dict, ignored_feats=None):
                 ignored_adjust_dict[val] = 1
         #endfor
     #endif
+    ignored_adjust_keys = set(ignored_adjust_dict.keys())
 
     # get the number of feats, less the one we've ignored
-    n_feats = meta_dict['max_idx'] + 1
+    n_feats = 0
+    if n_features is not None:
+        n_feats = n_features
+    elif meta_dict is not None:
+        n_feats = meta_dict['max_idx'] + 1
     if ignored_feats is not None:
         for feat in ignored_feats:
             val = meta_dict[feat]
@@ -155,9 +160,9 @@ def load_sparse_feats(filename, meta_dict, ignored_feats=None):
         #endfor
     #endif
 
-    n_rows = 0
     with open(filename, 'r') as f:
         # Read the total number of lines
+        n_rows = 0
         for n_rows, l in enumerate(f):
             pass
         n_rows += 1
@@ -181,23 +186,27 @@ def load_sparse_feats(filename, meta_dict, ignored_feats=None):
             y[i] = int(float(vector_split[0].strip()))
 
             # iterate through the vector
-            for i in range(1, len(vector_split)):
-                kv_pair = vector_split[i].split(":")
-                if float(kv_pair[1]) > 0.0:
+            for j in range(1, len(vector_split)):
+                kv_pair = vector_split[j].split(":")
+
+                if float(kv_pair[1]) != 0.0:
                     idx = int(kv_pair[0].strip())
                     adj_idx = idx
 
                     # If this is one of the ignored features, drop it
                     if ignored_feats is not None and \
-                            util.is_ignored_idx(idx, meta_dict, ignored_feats):
+                       util.is_ignored_idx(idx, meta_dict, ignored_feats):
                         continue
 
                     # Adjust the index, to account for the missing
                     # indices
-                    for j in ignored_adjust_dict.keys():
-                        if j < idx:
-                            adj_idx -= ignored_adjust_dict[j]
+                    for ignored_f in ignored_adjust_keys:
+                        if ignored_f < idx:
+                            adj_idx -= ignored_adjust_dict[ignored_f]
                     #endfor
+
+                    if "box" in filename:
+                        adj_idx -= 1
 
                     x[i][adj_idx] = float(kv_pair[1].strip())
                 #endif

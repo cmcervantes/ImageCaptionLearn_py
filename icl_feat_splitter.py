@@ -1,13 +1,14 @@
 from argparse import ArgumentParser
 from os.path import abspath, expanduser
 
-from utils import icl_util as util
-from utils.LogUtil import LogUtil
+from utils import core as util
+from utils.Logger import Logger
 
-log = LogUtil(lvl='debug', delay=45)
+
+log = Logger(lvl='debug', delay=45)
 parser = ArgumentParser("ImageCaptionLearn_py: Feature File Splitter")
 parser.add_argument("--feats_file", type=str, help="The feature file to split into " +
-        "intra-caption and inter-caption files")
+                    "intra-caption and inter-caption files")
 parser.add_argument('--ordered_intra', action='store_true',
         help='Whether to split intra-caption file into ordered ij and ji files')
 args = parser.parse_args()
