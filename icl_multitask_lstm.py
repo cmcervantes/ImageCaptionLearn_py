@@ -20,6 +20,7 @@ TASK_CLASS_DICT = {'rel_intra': ['n', 'c', 'b', 'p'],
                    'card': ['0', '1', '2', '3', '4', '5',
                             '6', '7', '8', '9', '10', '11+']}
 TASKS = ['rel_intra', 'rel_cross', 'nonvis', 'affinity', 'card']
+#TASKS = ['rel_intra']
 N_EMBEDDING_WIDTH = 300
 N_BOX_WIDTH = 4096
 
@@ -106,6 +107,41 @@ def get_valid_mention_box_pairs(data_dict):
 #enddef
 
 
+def shuffle_mention_box_pairs(mention_box_pairs):
+    """
+    Returns a shuffled list of mention/box pair IDs, such that
+    the images appear in a random order, and mention/box
+    pairs _within_ the images are in random order, but the
+    mention/box pairs are grouped with images
+
+    :param mention_box_pairs:
+    :return:
+    """
+    image_mention_box_pairs = dict()
+    for mb_pair in mention_box_pairs:
+        # Mention / box IDs are
+        #   <mention_id> | <box_id>
+        # and mention IDs are, themselves,
+        #   <img_id>#<cap_idx>;mention:<mention_idx>
+        img_id = mb_pair.split("#")[0]
+        if img_id not in image_mention_box_pairs:
+            image_mention_box_pairs[img_id] = list()
+        image_mention_box_pairs[img_id].append(mb_pair)
+    #endfor
+
+    img_ids = image_mention_box_pairs.keys()
+    np.random.shuffle(img_ids)
+    mention_box_pairs_shuffled = list()
+    for img_id in img_ids:
+        mb_pairs = image_mention_box_pairs[img_id]
+        np.random.shuffle(mb_pairs)
+        for mb_pair in mb_pairs:
+            mention_box_pairs_shuffled.append(mb_pair)
+    #endfor
+    return mention_box_pairs_shuffled
+#endfor
+
+
 def load_data(data_dir, data, split, embedding_type, log=None):
     """
     Loads all of the data for all tasks
@@ -116,7 +152,7 @@ def load_data(data_dir, data, split, embedding_type, log=None):
     :param log:
     :return:
     """
-    global TASK_CLASS_DICT, N_EMBEDDING_WIDTH
+    global TASKS, TASK_CLASS_DICT, N_EMBEDDING_WIDTH
 
     task_data_dicts = dict()
 
@@ -147,7 +183,7 @@ def load_data(data_dir, data, split, embedding_type, log=None):
         feature_file += ".feats"
         feature_meta_file += "_meta.json"
 
-        log.info("Loading data for " + task)
+        log.info(None, "Loading data for %s: %s, %s, %s", task, sentence_file, mention_idx_file, feature_file)
         task_data_dicts[task] = nn_data.load_sentences(sentence_file, embedding_type)
         task_data_dicts[task].update(nn_data.load_mentions(mention_idx_file, task,
                                                            feature_file, feature_meta_file,
@@ -156,8 +192,9 @@ def load_data(data_dir, data, split, embedding_type, log=None):
             task_data_dicts[task]['gold_label_dict'] = \
                 nn_data.load_relation_labels(label_file)
         elif task == "affinity":
-            box_dir = data_dir + "feats/" + data + "_boxes/" + split + "/"
-            task_data_dicts[task].update(nn_data.load_boxes(box_dir, label_file))
+            task_data_dicts[task]['box_dir'] = data_dir + "feats/" + \
+                                               data + "_boxes/" + split + "/"
+            task_data_dicts[task].update(nn_data.load_boxes(label_file))
         #endif
     #endfor
     return task_data_dicts
@@ -194,21 +231,20 @@ def train_jointly(multitask_scheme, epochs, batch_size, lstm_input_dropout,
 
     # We either have a simple sum-of-losses model or we're learning
     # weights over those losses
+    # tf.stack allows us to vector-ize scalars, and since
+    # the ffw function assumes a kind of [batch_size, units]
+    # shape, we expand the first dimension to 1;
+    # We just do this up front because reduce sum doesn't care, so
+    # we can use it in both branches
+    losses = list()
+    for task in TASKS:
+        losses.append(task_vars[task]['loss'])
+    tf_losses = tf.expand_dims(tf.stack(losses), 0)
     if multitask_scheme == "simple_joint":
-        joint_loss = task_vars['rel_intra']['loss'] + task_vars['rel_cross']['loss'] + \
-                     task_vars['nonvis']['loss'] + task_vars['affinity']['loss'] + \
-                     task_vars['card']['loss']
+        joint_loss = tf.reduce_sum(tf_losses)
         nn_util.add_train_op(joint_loss, lrn_rate, adam_epsilon, clip_norm)
     elif multitask_scheme == "weighted_joint":
-        # tf.stack allows us to vector-ize scalars, and since
-        # the ffw function assumes a kind of [batch_size, units]
-        # shape, we expand the first dimension to 1
-        losses = tf.expand_dims(tf.stack([task_vars['rel_intra']['loss'],
-                                          task_vars['rel_cross']['loss'],
-                                          task_vars['nonvis']['loss'],
-                                          task_vars['affinity']['loss'],
-                                          task_vars['card']['loss']]), 0)
-        joint_loss = tf.reduce_sum(nn_util.setup_ffw(losses, [5]))
+        joint_loss = tf.reduce_sum(nn_util.setup_ffw(tf_losses, [5]))
         nn_util.add_train_op(joint_loss, lrn_rate, adam_epsilon, clip_norm)
     #endif
     train_op = tf.get_collection('train_op')[0]
@@ -228,7 +264,10 @@ def train_jointly(multitask_scheme, epochs, batch_size, lstm_input_dropout,
             max_samples = 0
             sample_indices = dict()
             for task in TASKS:
-                np.random.shuffle(task_ids[task])
+                if task == 'affinity':
+                    task_ids[task] = shuffle_mention_box_pairs(task_ids[task])
+                else:
+                    np.random.shuffle(task_ids[task])
                 max_samples = max(max_samples, len(task_ids[task]))
                 sample_indices[task] = 0
             #endfor
@@ -256,10 +295,14 @@ def train_jointly(multitask_scheme, epochs, batch_size, lstm_input_dropout,
                         batch_ids.extend(ids[0:remainder])
                         sample_indices[task] = remainder
                     #endif
+                    box_dir = None
+                    if task == 'affinity':
+                        box_dir = task_data_dicts[task]['box_dir']
                     batch_tensor_dicts.append(nn_data.load_batch(batch_ids,
                                                                  task_data_dicts[task],
                                                                  task, len(TASK_CLASS_DICT[task]),
-                                                                 N_EMBEDDING_WIDTH))
+                                                                 N_EMBEDDING_WIDTH, N_BOX_WIDTH,
+                                                                 box_dir))
                 #endfor
 
                 # It so happens that I'm using task names as variable
@@ -275,13 +318,17 @@ def train_jointly(multitask_scheme, epochs, batch_size, lstm_input_dropout,
 
             for task in TASKS:
                 eval_ids = eval_task_ids[task]
+                box_dir = None
+                if task == 'affinity':
+                    box_dir = eval_task_data_dicts[task]['box_dir']
                 with tf.variable_scope(task):
                     pred_scores, gold_label_dict = \
                         nn_util.get_pred_scores_mcc(task, encoding_scheme, sess,
                                                     batch_size, eval_ids,
                                                     eval_task_data_dicts[task],
                                                     len(TASK_CLASS_DICT[task]),
-                                                    N_EMBEDDING_WIDTH, log)
+                                                    N_EMBEDDING_WIDTH, N_BOX_WIDTH,
+                                                    box_dir, log)
 
                 # If we do an argmax on the scores, we get the predicted labels
                 pred_labels = list()
@@ -294,14 +341,16 @@ def train_jointly(multitask_scheme, epochs, batch_size, lstm_input_dropout,
 
                 # Evaluate the predictions
                 if 'rel' in task:
-                    score_dict = nn_eval.evaluate_relations(eval_ids, pred_labels,
-                                                            task_data_dicts[task]['gold_label_dict'],
-                                                            log)
+                    score_dict = \
+                        nn_eval.evaluate_relations(eval_ids, pred_labels,
+                                                   eval_task_data_dicts[task]['gold_label_dict'],
+                                                   log)
                 else:
-                    score_dict = nn_eval.evaluate_multiclass(gold_labels,
-                                                             pred_labels,
-                                                             TASK_CLASS_DICT[task], log)
+                    score_dict = \
+                        nn_eval.evaluate_multiclass(gold_labels, pred_labels,
+                                                    TASK_CLASS_DICT[task], log)
                 #endif
+
             #endfor
         #endfor
 
@@ -362,8 +411,10 @@ def train_alternately(epochs, task_batch_sizes, lstm_input_dropout,
             batch_ids = list()
             for task in TASKS:
                 ids = task_ids[task]
-                pad_length = task_batch_sizes[task] * (len(ids) /
-                             task_batch_sizes[task] + 1) - len(ids)
+                if task == 'affinity':
+                    ids = shuffle_mention_box_pairs(ids)
+                pad_length = task_batch_sizes[task] * \
+                             (len(ids) / task_batch_sizes[task] + 1) - len(ids)
                 id_arr = np.pad(ids, (0, pad_length), 'wrap')
                 id_matrix = np.reshape(id_arr, [-1, task_batch_sizes[task]])
                 for row_idx in range(0, id_matrix.shape[0]):
@@ -373,12 +424,18 @@ def train_alternately(epochs, task_batch_sizes, lstm_input_dropout,
             # Shuffle that list, feeding examples for whatever
             # task and whatever ids we have
             np.random.shuffle(batch_ids)
-            for task_ids_tuple in batch_ids:
-                task, ids = task_ids_tuple
+            for j in range(0, len(batch_ids)):
+                log.log_status('info', None, "Completed %d (%.2f%%) iterations",
+                               j, 100.0 * j / len(batch_ids))
+                task, ids = batch_ids[j]
+                box_dir = None
+                if task == 'affinity':
+                    box_dir = task_data_dicts[task]['box_dir']
                 batch_tensor = \
                     nn_data.load_batch(ids, task_data_dicts[task],
                                        task, len(TASK_CLASS_DICT[task]),
-                                       N_EMBEDDING_WIDTH)
+                                       N_EMBEDDING_WIDTH, N_BOX_WIDTH,
+                                       box_dir)
 
                 # Run the operation for this task
                 nn_util.run_op(sess, train_ops[task],
@@ -392,13 +449,17 @@ def train_alternately(epochs, task_batch_sizes, lstm_input_dropout,
             saver.save(sess, model_file)
             for task in TASKS:
                 eval_ids = eval_task_ids[task]
+                box_dir = None
+                if task == 'affinity':
+                    box_dir = eval_task_data_dicts[task]['box_dir']
                 with tf.variable_scope(task):
                     pred_scores, gold_label_dict = \
                         nn_util.get_pred_scores_mcc(task, encoding_scheme, sess,
                                                     task_batch_sizes[task], eval_ids,
                                                     eval_task_data_dicts[task],
                                                     len(TASK_CLASS_DICT[task]),
-                                                    N_EMBEDDING_WIDTH, log)
+                                                    N_EMBEDDING_WIDTH, N_BOX_WIDTH,
+                                                    box_dir, log)
 
                 # If we do an argmax on the scores, we get the predicted labels
                 pred_labels = list()
@@ -411,13 +472,14 @@ def train_alternately(epochs, task_batch_sizes, lstm_input_dropout,
 
                 # Evaluate the predictions
                 if 'rel' in task:
-                    score_dict = nn_eval.evaluate_relations(eval_ids, pred_labels,
-                                                            task_data_dicts[task]['gold_label_dict'],
-                                                            log)
+                    score_dict = \
+                        nn_eval.evaluate_relations(eval_ids, pred_labels,
+                                                   eval_task_data_dicts[task]['gold_label_dict'],
+                                                   log)
                 else:
-                    score_dict = nn_eval.evaluate_multiclass(gold_labels,
-                                                             pred_labels,
-                                                             TASK_CLASS_DICT[task], log)
+                    score_dict = \
+                        nn_eval.evaluate_multiclass(gold_labels, pred_labels,
+                                                    TASK_CLASS_DICT[task], log)
                 #endif
             #endfor
         #endfor
@@ -427,6 +489,78 @@ def train_alternately(epochs, task_batch_sizes, lstm_input_dropout,
     #endwith
 #enddef
 
+
+def predict(sess, multitask_scheme, encoding_scheme,
+            task_data_dicts, task_ids, batch_size=None,
+            task_batch_sizes=None, log=None):
+    """
+
+    :param sess:
+    :param multitask_scheme:
+    :param encoding_scheme:
+    :param task_data_dicts:
+    :param task_ids:
+    :param batch_size:
+    :param task_batch_sizes:
+    :param log:
+    :return:
+    """
+    global TASKS, TASK_CLASS_DICT
+
+    for task in TASKS:
+        eval_ids = task_ids[task]
+        box_dir = None
+        if task == 'affinity':
+            box_dir = task_data_dicts[task]['box_dir']
+        task_batch_size = batch_size
+        if multitask_scheme == 'alternate':
+            task_batch_size = task_batch_sizes[task]
+        with tf.variable_scope(task):
+            pred_scores, gold_label_dict = \
+                nn_util.get_pred_scores_mcc(task, encoding_scheme, sess,
+                                            task_batch_size, eval_ids,
+                                            task_data_dicts[task],
+                                            len(TASK_CLASS_DICT[task]),
+                                            N_EMBEDDING_WIDTH, N_BOX_WIDTH,
+                                            box_dir, log)
+
+            # If we do an argmax on the scores, we get the predicted labels
+            mentions = list(pred_scores.keys())
+            pred_labels = list()
+            gold_labels = list()
+            for m in mentions:
+                pred_labels.append(np.argmax(pred_scores[m]))
+                if 'rel' not in task:
+                    gold_labels.append(np.argmax(gold_label_dict[m]))
+            #endfor
+
+            # Evaluate the predictions
+            if 'rel' in task:
+                score_dict = \
+                    nn_eval.evaluate_relations(eval_ids, pred_labels,
+                                               task_data_dicts[task]['gold_label_dict'],
+                                               log)
+            else:
+                score_dict = \
+                    nn_eval.evaluate_multiclass(gold_labels, pred_labels,
+                                                TASK_CLASS_DICT[task], log)
+            #endif
+
+            # Write the scores file for this task
+            log.info('Writing scores file for ' + task)
+            with open(task_data_dicts[task]['scores_file'], 'w') as f:
+                for id in pred_scores.keys():
+                    score_line = list()
+                    score_line.append(id)
+                    for score in pred_scores[id]:
+                        if score == 0:
+                            score = np.nextafter(0, 1)
+                        score_line.append(str(np.log(score)))
+                    f.write(",".join(score_line) + "\n")
+                f.close()
+            #endwith
+        #endfor
+#enddef
 
 
 def __init__():
@@ -480,13 +614,13 @@ def __init__():
     parser.add_argument("--data_dir", required=True,
                         type=lambda f: util.arg_path_exists(parser, f),
                         help="Directory containing raw/, feats/, and scores/ directories")
-    parser.add_argument("--data", choices=["flickr30k", "mscoco"], required=True,
+    parser.add_argument("--data", choices=["flickr30k", "mscoco", "coco30k"], required=True,
                         help="Dataset to use")
-    parser.add_argument("--split", choices=["train", "dev", "test"], required=True,
+    parser.add_argument("--split", choices=["train", "dev", "test", "trainDev"], required=True,
                         help="Dataset split")
-    parser.add_argument("--eval_data", choices=["flickr30k", "mscoco"], required=True,
+    parser.add_argument("--eval_data", choices=["flickr30k", "mscoco", "coco30k"], required=True,
                         help="Evaluation dataset to use")
-    parser.add_argument("--eval_split", choices=["train", "dev", "test"], required=True,
+    parser.add_argument("--eval_split", choices=["train", "dev", "test", "trainDev"], required=True,
                         help="Evaluation dataset split")
     parser.add_argument("--train", action='store_true', help='Trains a model')
     parser.add_argument("--activation", choices=['sigmoid', 'tanh', 'relu', 'leaky_relu'],
@@ -588,8 +722,19 @@ def __init__():
                               task_ids, eval_task_ids, model_file, log)
         #endif
     elif predict_scores:
-        pass
+        for task in TASKS:
+            task_data_dicts[task]['scores_file'] =\
+                arg_dict['data_dir'] + "/scores/" + arg_dict['data'] + "_" + \
+                arg_dict['split'] + "_" + task + "_mulit_" + multitask_scheme + \
+                "_lstm.scores"
+        #endfor
 
+        # Restore our variables
+        tf.reset_default_graph()
+        with tf.Session() as sess:
+            saver = tf.train.import_meta_graph(model_file + ".meta")
+            saver.restore(sess, model_file)
+            predict(sess, task_data_dicts, task_ids, log)
 #enddef
 
 __init__()

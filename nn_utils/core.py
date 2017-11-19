@@ -607,7 +607,7 @@ def run_op(sess, op, batch_tensor_list, lstm_input_dropout,
 
 def get_pred_scores_mcc(task, encoding_scheme, sess, batch_size, ids,
                         data_dict, n_classes, n_embedding_width=300,
-                        log=None):
+                        n_box_width=4096, box_dir=None, log=None):
     """
     Returns the predicted scores and gold labels for the given list
     of ids and the given data dictionary
@@ -644,7 +644,8 @@ def get_pred_scores_mcc(task, encoding_scheme, sess, batch_size, ids,
 
         # Predict on this batch
         batch_tensors = nn_data.load_batch(id_matrix[i], data_dict, task,
-                                           n_classes, n_embedding_width)
+                                           n_classes, n_embedding_width,
+                                           n_box_width, box_dir)
         predicted_scores = run_op(sess, predicted_proba, [batch_tensors],
                                   1.0, 1.0, encoding_scheme, [task],
                                   [scope_name.replace("/", "")],

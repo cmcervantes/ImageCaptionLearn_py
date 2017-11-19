@@ -91,7 +91,7 @@ def evaluate(ignored_feats=set()):
 
     log.info("---Scores---")
     for label in scores.keys:
-        print str(label) + "\t" + scores.get_score(label).toLatexString() + " & %.2f\\%%\\\\" % \
+        print str(label) + "\t" + scores.get_score(label).to_latex_string() + " & %.2f\\%%\\\\" % \
                                                                             (scores.get_gold_percent(label))
     kurtoses = list()
     for log_proba in y_pred_probs:

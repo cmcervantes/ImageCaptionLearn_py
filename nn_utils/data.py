@@ -168,7 +168,7 @@ def load_mentions(mention_idx_file, task, feats_file, feats_meta_file, n_classes
                 if task != "affinity":
                     label = np.zeros([n_classes])
                     label[int(line_split[2].strip())] = 1.0
-                    ['labels'][id] = label
+                    data_dict['labels'][id] = label
                 #endif
             #endfor
         #endwith
@@ -187,7 +187,7 @@ def load_mentions(mention_idx_file, task, feats_file, feats_meta_file, n_classes
 #enddef
 
 
-def load_boxes(box_dir, mention_box_label_file):
+def load_boxes(mention_box_label_file):
     """
     Reads the box index file, mapping mention/box indices with
     labels and loads all box features from the box_dir
@@ -208,15 +208,8 @@ def load_boxes(box_dir, mention_box_label_file):
         #endfor
     #endwith
 
-    # Load the entirety of the box features from the directory
-    # TODO: determine if we need to do the memory-efficient, cpu-inefficient method of loading boxes
-    data_dict['box_features'] = dict()
-    for filename in listdir(box_dir):
-        data_dict['n_box_feats'] = 4095
-        boxes, _, ids = data_util.load_sparse_feats(box_dir + "/" + filename, None, None, 4096)
-        for i in range(0, len(ids)):
-            data_dict['box_features'][ids[i]] = boxes[i]
-    #endfor
+    # We have a set number of box embedding widths
+    data_dict['n_box_feats'] = 4095
 
     return data_dict
 #enddef
@@ -298,7 +291,8 @@ def load_relation_labels(filename):
 
 
 def load_batch(ids, data_dict, task,
-               n_classes, n_embedding_widths=300):
+               n_classes, n_embedding_widths=300,
+               n_box_widths=4096, box_dir=None):
     """
     Loads a batch of data, given a list of IDs,
     a data dictionary, the task we're retrieving
@@ -312,6 +306,8 @@ def load_batch(ids, data_dict, task,
                   card, affinity}
     :param n_classes: Number of classes, for the task
     :param n_embedding_widths: Width of word embeddings
+    :param n_box_widths: Width of fast RCNN features
+    :param box_dir: Directories with bounding box features
     :return: Batch tensors
     """
 
@@ -374,12 +370,16 @@ def load_batch(ids, data_dict, task,
         m_id, b_id = ids[0].split("|")
         batch_tensors['m_feats'] = np.zeros([batch_size,
                                              len(data_dict['mention_features'][m_id])])
-        batch_tensors['b_feats'] = np.zeros([batch_size,
-                                             len(data_dict['box_features'][b_id])])
+        batch_tensors['b_feats'] = np.zeros([batch_size, n_box_widths])
     else:
         n_features = len(data_dict['mention_features'][ids[0]])
         batch_tensors['m_feats'] = np.zeros([batch_size, n_features])
     #endif
+
+    # We're going to keep a dictionary of ids -> box features
+    # for the current image we're looking at
+    box_feature_dict = dict()
+    loaded_box_ids = set()
 
     # Iterate through the IDs, loading our data
     for i in range(0, batch_size):
@@ -393,6 +393,7 @@ def load_batch(ids, data_dict, task,
         #endif
 
         batch_tensors['labels'][i] = data_dict['labels'][label_id]
+
         # Relation indices are first_i, last_i, first_j, last_j
         # Other indices are first_i, last_i
         first_j = None
@@ -431,13 +432,37 @@ def load_batch(ids, data_dict, task,
             np.array([0, sent_j, batch_tensors['seq_lengths'][sent_j] - 1])
         batch_tensors['sent_first_j_bw'][i] = np.array([1, sent_j, 0])
 
+        # Add the mention feats
         if "rel" in task:
             batch_tensors['ij_feats'][i] = data_dict['mention_features'][m_id]
         else:
             batch_tensors['m_feats'][i] = data_dict['mention_features'][m_id]
 
+        # Load box features for this ID; instead of loading all
+        # box features into memory -- which is unrealistic --
+        # we're going to open files as we need them
         if task == 'affinity':
-            batch_tensors['b_feats'][i] = data_dict['box_features'][b_id]
+            if b_id in loaded_box_ids:
+                # If this box is in the set of loaded boxes, just retrieve it
+                batch_tensors['b_feats'][i] = box_feature_dict[b_id]
+            else:
+                # If this box is not in the set of loaded boxes,
+                # we need to open the appropriate file and
+                # load all the boxes for that image; this is naturally
+                # a horribly inefficient idea if we have truly
+                # random boxes, but if we're ordering mention/box
+                # pairs as random _per image_ then we're only
+                # opening a new file at most
+                #       max_n_boxes / batch_size + 2
+                img_id = b_id.split(";")[0]
+                box_features, _, box_ids = \
+                    data_util.load_sparse_feats(box_dir + "/" +
+                                                img_id.replace('.jpg', '.feats'),
+                                                None, None, n_box_widths)
+                for j in range(0, len(box_ids)):
+                    box_feature_dict[box_ids[j]] = box_features[j]
+                loaded_box_ids = set(box_ids)
+            #endif
     #endfor
 
     return batch_tensors

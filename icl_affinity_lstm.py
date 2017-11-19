@@ -26,9 +26,9 @@ embedding_type = None
 task = "affinity"
 
 
-def __shuffle_mention_box_pairs(mention_box_pairs):
+def shuffle_mention_box_pairs(mention_box_pairs):
     """
-    Returns a shuffled list of mention/box pairs, such that
+    Returns a shuffled list of mention/box pair IDs, such that
     the images appear in a random order, and mention/box
     pairs _within_ the images are in random order, but the
     mention/box pairs are grouped with images
@@ -130,14 +130,14 @@ def train(encoding_scheme, embedding_type,
     data_dict.update(nn_data.load_mentions(mention_idx_file, task,
                                            feature_file, feature_meta_file,
                                            n_classes))
-    data_dict.update(nn_data.load_boxes(box_dir, mention_box_label_file))
+    data_dict.update(nn_data.load_boxes(mention_box_label_file))
 
     log.info("Loading eval data")
     eval_data_dict = nn_data.load_sentences(eval_sentence_file, embedding_type)
     eval_data_dict.update(nn_data.load_mentions(eval_mention_idx_file, task,
                                                 eval_feature_file, eval_feature_meta_file,
                                                 n_classes))
-    eval_data_dict.update(nn_data.load_boxes(eval_box_dir, eval_mention_box_label_file))
+    eval_data_dict.update(nn_data.load_boxes(eval_mention_box_label_file))
 
     # Load mention box pairs, ignoring all those mentions
     # that aren't in our loaded data (for punctuation reasons)
@@ -176,8 +176,7 @@ def train(encoding_scheme, embedding_type,
             accuracies = list()
 
             # Shuffle the data once for this epoch
-            #mention_box_pairs = __shuffle_mention_box_pairs(mention_box_pairs)
-            np.random.shuffle(mention_box_pairs)
+            mention_box_pairs = shuffle_mention_box_pairs(mention_box_pairs)
 
             # Iterate through the entirety of the data
             start_idx = 0
@@ -192,7 +191,8 @@ def train(encoding_scheme, embedding_type,
                 batch_tensors = nn_data.load_batch(batch_mention_box_pairs,
                                                    data_dict, task,
                                                    n_classes,
-                                                   N_EMBEDDING_WIDTH)
+                                                   N_EMBEDDING_WIDTH,
+                                                   N_BOX_WIDTH, box_dir)
 
                 # Train
                 nn_util.run_op(sess, train_op, [batch_tensors],
@@ -232,7 +232,8 @@ def train(encoding_scheme, embedding_type,
                                                 sess, batch_size,
                                                 eval_mention_box_pairs,
                                                 eval_data_dict, n_classes,
-                                                N_EMBEDDING_WIDTH, log)
+                                                N_EMBEDDING_WIDTH, N_BOX_WIDTH,
+                                                eval_box_dir, log)
 
                 # If we do an argmax on the scores, we get the predicted labels
                 eval_mentions = list(pred_scores.keys())
@@ -289,7 +290,7 @@ def predict(encoding_scheme, embedding_type,
     data_dict.update(nn_data.load_mentions(mention_idx_file, task,
                                            feature_file, feature_meta_file,
                                            n_classes))
-    data_dict.update(nn_data.load_boxes(box_dir, mention_box_label_file))
+    data_dict.update(nn_data.load_boxes(mention_box_label_file))
 
     # Get the predicted scores, given our arguments
     mention_box_pairs = get_valid_mention_box_pairs(data_dict)
@@ -297,7 +298,7 @@ def predict(encoding_scheme, embedding_type,
         nn_util.get_pred_scores_mcc(task, encoding_scheme, tf_session,
                                     batch_size, mention_box_pairs,
                                     data_dict, n_classes, N_EMBEDDING_WIDTH,
-                                    log)
+                                    N_BOX_WIDTH, box_dir, log)
 
     # If we do an argmax on the scores, we get the predicted labels
     mentions = list(pred_scores.keys())
@@ -319,7 +320,9 @@ def predict(encoding_scheme, embedding_type,
                 score_line = list()
                 score_line.append(pair_id)
                 for score in pred_scores[pair_id]:
-                    score_line.append(str(math.log(score)))
+                    if score == 0:
+                        score = np.nextafter(0, 1)
+                    score_line.append(str(np.log(score)))
                 f.write(",".join(score_line) + "\n")
             f.close()
         #endwith
@@ -368,13 +371,13 @@ def __init__():
     parser.add_argument("--data_dir", required=True,
                         type=lambda f: util.arg_path_exists(parser, f),
                         help="Directory containing raw/, feats/, and scores/ directories")
-    parser.add_argument("--data", choices=["flickr30k", "mscoco"], required=True,
-                        help="Dataset to use")
-    parser.add_argument("--split", choices=["train", "dev", "test"], required=True,
-                        help="Dataset split")
-    parser.add_argument("--eval_data", choices=["flickr30k", "mscoco"], required=True,
+    parser.add_argument("--data", choices=["flickr30k", "mscoco", "coco30k"],
+                        required=True, help="Dataset to use")
+    parser.add_argument("--split", choices=["train", "dev", "test", "trainDev"],
+                        required=True, help="Dataset split")
+    parser.add_argument("--eval_data", choices=["flickr30k", "mscoco", "coco30k"],
                         help="Evaluation dataset to use")
-    parser.add_argument("--eval_split", choices=["train", "dev", "test"], required=True,
+    parser.add_argument("--eval_split", choices=["train", "dev", "test", "trainDev"],
                         help="Evaluation dataset split")
     parser.add_argument("--encoding_scheme",
                         choices=["first_last_sentence", 'first_last_mention'],
@@ -464,7 +467,7 @@ def __init__():
               eval_box_dir=eval_box_dir, eval_mention_box_label_file=eval_mention_box_label_file,
               early_stopping=arg_dict['early_stopping'], log=log)
     elif arg_dict['predict']:
-        scores_file = data_dir + "scores/" + data_root + "_nonvis.scores"
+        scores_file = data_dir + "scores/" + data_root + "_affinity_lstm.scores"
 
         # Restore our variables
         tf.reset_default_graph()
@@ -474,6 +477,7 @@ def __init__():
 
             predict(encoding_scheme=arg_dict['encoding_scheme'],
                     embedding_type=embedding_type,
+                    tf_session=sess,
                     batch_size=arg_dict['batch_size'],
                     sentence_file=sentence_file,
                     mention_idx_file=mention_idx_file,

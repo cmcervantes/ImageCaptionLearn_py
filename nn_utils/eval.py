@@ -19,7 +19,6 @@ def evaluate_relations(mention_pairs, pred_labels,
                         to mention_pairs
     :param gold_label_dict: Dictionary of (m_i_id, m_j_id) tuples mapped to
                             gold labels
-    :param gold_nonvis: Whether to use gold nonvisual information in reporting scores
     :param log: optional logger to log status messages to
     :return: Complete score_dict for these mention pairs
     """
@@ -39,9 +38,11 @@ def evaluate_relations(mention_pairs, pred_labels,
         log.info("Predicting")
     gold_pairs = set(gold_label_dict.keys())
     pred_pairs = set(pred_label_dict.keys())
+
     for pair in gold_pairs:
         if pair[0] not in pred_pairs or pair[1] not in pred_pairs:
             continue
+
         gold = gold_label_dict[pair]
         pred_ij = pred_label_dict[pair[0]]
         pred_ji = pred_label_dict[pair[1]]
@@ -84,6 +85,8 @@ def evaluate_relations(mention_pairs, pred_labels,
                  "null", "coref", "subset"]
     for l in label_str:
         print "%10s: %s" % (l, score_dict.get_score(l).to_string())
+    for l in label_str:
+        print "%10s: pred: %d; gold: %d" % (l, score_dict.get_pred_count(l), score_dict.get_gold_count(l))
     score_dict.print_confusion()
 
     return score_dict

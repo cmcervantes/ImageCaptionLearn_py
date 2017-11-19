@@ -1,4 +1,3 @@
-import math
 import os
 from argparse import ArgumentParser
 
@@ -157,8 +156,9 @@ def train(rel_type, encoding_scheme, embedding_type,
                                                              sess, batch_size,
                                                              eval_mention_pairs,
                                                              eval_data_dict,
-                                                             n_classes, N_EMBEDDING_WIDTH,
-                                                             log)
+                                                             n_classes,
+                                                             N_EMBEDDING_WIDTH,
+                                                             log=log)
                 pred_labels = list()
                 for pair in eval_mention_pairs:
                     pred_labels.append(np.argmax(pred_scores[pair]))
@@ -225,7 +225,7 @@ def predict(rel_type, encoding_scheme, embedding_type,
                                                  tf_session, batch_size,
                                                  mention_pairs, data_dict,
                                                  n_classes, N_EMBEDDING_WIDTH,
-                                                 log)
+                                                 log=log)
 
     # log.warning("Skipping evaluation, since it takes way too long right now for some reason")
     log.info("Loading data from " + label_file)
@@ -249,7 +249,9 @@ def predict(rel_type, encoding_scheme, embedding_type,
                 score_line = list()
                 score_line.append(pair_id)
                 for score in pred_scores[pair_id]:
-                    score_line.append(str(math.log(score)))
+                    if score == 0:
+                        score = np.nextafter(0, 1)
+                    score_line.append(str(np.log(score)))
                 f.write(",".join(score_line) + "\n")
             f.close()
         #endwith

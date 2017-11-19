@@ -1,7 +1,5 @@
-import math
 import os
 from argparse import ArgumentParser
-from os.path import abspath, expanduser
 
 import numpy as np
 import tensorflow as tf
@@ -161,7 +159,7 @@ def train(task, encoding_scheme, embedding_type,
                     nn_util.get_pred_scores_mcc(task, encoding_scheme,
                                                 sess, batch_size, eval_mentions,
                                                 eval_data_dict, n_classes,
-                                                N_EMBEDDING_WIDTH, log)
+                                                N_EMBEDDING_WIDTH, log=log)
 
                 # If we do an argmax on the scores, we get the predicted labels
                 eval_mentions = list(pred_scores.keys())
@@ -225,7 +223,7 @@ def predict(task, encoding_scheme, embedding_type,
     pred_scores, gold_label_dict = \
         nn_util.get_pred_scores_mcc(task, encoding_scheme, tf_session,
                                     batch_size, mentions, data_dict,
-                                    n_classes, N_EMBEDDING_WIDTH, log)
+                                    n_classes, N_EMBEDDING_WIDTH, log=log)
 
     # If we do an argmax on the scores, we get the predicted labels
     pred_labels = list()
@@ -239,14 +237,16 @@ def predict(task, encoding_scheme, embedding_type,
     nn_eval.evaluate_multiclass(gold_labels, pred_labels, classes, log)
 
     # If a scores file was specified, write the scores
-    log.info("Writing scores file")
     if scores_file is not None:
+        log.info("Writing scores file to " + scores_file)
         with open(scores_file, 'w') as f:
             for pair_id in pred_scores.keys():
                 score_line = list()
                 score_line.append(pair_id)
                 for score in pred_scores[pair_id]:
-                    score_line.append(str(math.log(score)))
+                    if score == 0:
+                        score = np.nextafter(0, 1)
+                    score_line.append(str(np.log(score)))
                 f.write(",".join(score_line) + "\n")
             f.close()
         #endwith
@@ -383,7 +383,7 @@ def __init__():
               early_stopping=arg_dict['early_stopping'],
               log=log)
     elif arg_dict['predict']:
-        scores_file = data_dir + "scores/" + data_root + "_nonvis.scores"
+        scores_file = data_dir + "scores/" + data_root + "_" + task + "_lstm.scores"
 
         # Restore our variables
         tf.reset_default_graph()

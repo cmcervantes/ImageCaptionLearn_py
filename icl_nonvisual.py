@@ -126,21 +126,12 @@ def evaluate(lemma_file=None, hyp_file=None,
     pred_scores = dict()
     for idx in range(len(y_pred_eval)):
         id = ids_eval[idx]
-        predictions = y_pred_eval[idx]
-        pred = None
-        max_prob = 0.0
-        for label in range(len(predictions)):
-            if predictions[label] > max_prob:
-                pred = label
-                max_prob = predictions[label]
-            #endif
-        #endfor
-        scores.increment(y_eval[idx], pred)
-        if pred == 0:
-            max_prob *= -1
-        #endif
-        pred_scores[id] = max_prob
+        pred_scores[id] = y_pred_eval[idx]
 
+        pred = 0 if pred_scores[id][0] > pred_scores[id][1] else 1
+        scores.increment(y_eval[idx], pred)
+
+        '''
         if lemma_file is not None and hyp_file is not None:
             lemma = lemma_dict[id]
             lemma_scores[lemma].increment(y_eval[idx], pred)
@@ -152,8 +143,10 @@ def evaluate(lemma_file=None, hyp_file=None,
                     hyp_scores[hyps].increment(y_eval[idx], pred)
             #endfor
         #endif
+        '''
     #endfor
 
+    '''
     if lemma_file is not None:
         with open('nonvisual_scores_lemma.csv', 'w') as f:
             f.write("lemma,gold_freq,gold_vis,gold_nonvis,pred_vis,pred_nonvis,vis_r,vis_p,vis_f1,"+\
@@ -193,20 +186,31 @@ def evaluate(lemma_file=None, hyp_file=None,
                     f.write(line)
             f.close()
 
+    '''
+
     log.info("---Confusion matrix---")
     scores.print_confusion()
 
     log.info("---Scores---")
     for label in scores.keys:
         print str(label) + "\t" + scores.get_score(label).to_string() + " - %d (%.2f%%)" % \
-                                                                       (scores.get_gold_count(label), scores.get_gold_percent(label))
+              (scores.get_gold_count(label), scores.get_gold_percent(label))
     log.info(None, "Accuracy: %.2f%%", scores.get_accuracy())
 
     if save_scores:
         log.info("Writing scores to " + scores_file)
         with open(scores_file, 'w') as f:
             for id in pred_scores.keys():
-                f.write(','.join((id, str(pred_scores[id]))) + '\n')
+                score_line = list()
+                score_line.append(id)
+                for s in pred_scores[id]:
+                    score = s
+                    if score == 0:
+                        score = np.nextafter(0, 1)
+                    score = str(np.log(score))
+                    score_line.append(score)
+                #endfor
+                f.write(','.join(score_line) + '\n')
             f.close()
         #endwith
     #endif
