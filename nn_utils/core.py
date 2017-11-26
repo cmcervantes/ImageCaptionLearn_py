@@ -352,13 +352,17 @@ def __add_lstm_output_placeholder(var_name, batch_size, lstm_outputs, scope_name
 
 
 def setup_batch_inputs(batch_size, lstm_outputs, task, encoding_scheme,
-                       n_mention_feats, n_box_feats=None):
+                       n_mention_feats, box_embedding_width=None,
+                       n_box_feats=None):
     """
 
     :param batch_size:
     :param lstm_outputs:
     :param task:
     :param encoding_scheme:
+    :param n_mention_feats:
+    :param box_embedding_width:
+    :param n_box_feats:
     :return:
     """
     scope_name = tf.get_variable_scope().name
@@ -394,7 +398,7 @@ def setup_batch_inputs(batch_size, lstm_outputs, task, encoding_scheme,
                                                          lstm_outputs, scope_name))
         tensor_list.append(__add_lstm_output_placeholder("last_j_fw", batch_size,
                                                          lstm_outputs, scope_name))
-        ij_feats = tf.placeholder(tf.float32, [batch_size, n_mention_feats + 1])
+        ij_feats = tf.placeholder(tf.float32, [batch_size, n_mention_feats])
         tf.add_to_collection(scope_name + "ij_feats", ij_feats)
         tensor_list.append(ij_feats)
 
@@ -410,14 +414,18 @@ def setup_batch_inputs(batch_size, lstm_outputs, task, encoding_scheme,
                                                              lstm_outputs, scope_name))
         #endif
     elif task == "nonvis" or task == "card" or task == "affinity":
-        m_feats = tf.placeholder(tf.float32, [batch_size, n_mention_feats + 1])
+        m_feats = tf.placeholder(tf.float32, [batch_size, n_mention_feats])
         tf.add_to_collection(scope_name + "m_feats", m_feats)
         tensor_list.append(m_feats)
 
         if task == "affinity":
-            b_feats = tf.placeholder(tf.float32, [batch_size, n_box_feats + 1])
-            tf.add_to_collection(scope_name + "b_feats", b_feats)
-            tensor_list.append(b_feats)
+            box_embeddings = tf.placeholder(tf.float32, [batch_size, box_embedding_width])
+            tf.add_to_collection(scope_name + "box_embeddings", box_embeddings)
+            tensor_list.append(box_embeddings)
+            if n_box_feats is not None:
+                b_feats = tf.placeholder(tf.float32, [batch_size, n_box_feats])
+                tf.add_to_collection(scope_name + "b_feats", b_feats)
+                tensor_list.append(b_feats)
         #endif
     #endif
 
@@ -429,7 +437,8 @@ def setup_batch_inputs(batch_size, lstm_outputs, task, encoding_scheme,
 
 def setup_core_architecture(task, encoding_scheme, batch_size, start_hidden_width,
                             hidden_depth, weighted_classes, activation,
-                            n_classes, n_mention_feats, n_box_feats=None):
+                            n_classes, n_mention_feats, box_embedding_width=None,
+                            n_box_feats=None):
     """
     Sets up the core classification network by adding variables to
     the tensorflow graph; assumes a bidirectional lstm (under that
@@ -446,8 +455,10 @@ def setup_core_architecture(task, encoding_scheme, batch_size, start_hidden_widt
     :param activation: Nonlinear activation function for hidden layers
     :param n_classes: Number of classes
     :param n_mention_feats: Number of mention features appended to lstm outputs
+    :param box_embedding_width: Width of box embeddings appended to the lstm outputs
+                                (affinity only
     :param n_box_feats: Number of box features appended to the lstm outputs
-                        (for affinity only)
+                        (for affinity only; currently coco only)
     :return:
     """
 
@@ -467,7 +478,8 @@ def setup_core_architecture(task, encoding_scheme, batch_size, start_hidden_widt
 
     # Set up the batch input tensors
     setup_batch_inputs(batch_size, lstm_outputs, task,
-                       encoding_scheme, n_mention_feats, n_box_feats)
+                       encoding_scheme, n_mention_feats,
+                       box_embedding_width, n_box_feats)
     batch_input = tf.get_collection(scope_name + 'batch_input')[0]
 
     # dropout percentage
@@ -595,8 +607,12 @@ def run_op(sess, op, batch_tensor_list, lstm_input_dropout,
                 batch_tensors['m_feats']
 
             if task == "affinity":
-                feed_dict[tf.get_collection(scope_name + 'b_feats')[0]] = \
-                    batch_tensors['b_feats']
+                feed_dict[tf.get_collection(scope_name + 'box_embeddings')[0]] = \
+                    batch_tensors['box_embeddings']
+                if 'b_feats' in batch_tensors.keys():
+                    feed_dict[tf.get_collection(scope_name + 'b_feats')[0]] = \
+                        batch_tensors['b_feats']
+                #endif
             #endif
         #endif
     #endfor
@@ -606,8 +622,7 @@ def run_op(sess, op, batch_tensor_list, lstm_input_dropout,
 
 
 def get_pred_scores_mcc(task, encoding_scheme, sess, batch_size, ids,
-                        data_dict, n_classes, n_embedding_width=300,
-                        n_box_width=4096, box_dir=None, log=None):
+                        data_dict, n_classes, log=None):
     """
     Returns the predicted scores and gold labels for the given list
     of ids and the given data dictionary
@@ -643,9 +658,7 @@ def get_pred_scores_mcc(task, encoding_scheme, sess, batch_size, ids,
                            i, 100.0 * i / id_matrix.shape[0])
 
         # Predict on this batch
-        batch_tensors = nn_data.load_batch(id_matrix[i], data_dict, task,
-                                           n_classes, n_embedding_width,
-                                           n_box_width, box_dir)
+        batch_tensors = nn_data.load_batch(id_matrix[i], data_dict, task, n_classes)
         predicted_scores = run_op(sess, predicted_proba, [batch_tensors],
                                   1.0, 1.0, encoding_scheme, [task],
                                   [scope_name.replace("/", "")],

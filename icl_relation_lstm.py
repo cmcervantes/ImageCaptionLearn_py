@@ -124,7 +124,7 @@ def train(rel_type, encoding_scheme, embedding_type,
                 # Retrieve this batch
                 batch_mentions = mentions[start_idx:end_idx]
                 batch_tensors = nn_data.load_batch(batch_mentions, data_dict,
-                                                   task, n_classes, N_EMBEDDING_WIDTH)
+                                                   task, n_classes)
 
                 # Train
                 nn_util.run_op(sess, train_op, [batch_tensors], lstm_input_dropout,
@@ -156,18 +156,19 @@ def train(rel_type, encoding_scheme, embedding_type,
                                                              sess, batch_size,
                                                              eval_mention_pairs,
                                                              eval_data_dict,
-                                                             n_classes,
-                                                             N_EMBEDDING_WIDTH,
-                                                             log=log)
+                                                             n_classes, log)
                 pred_labels = list()
                 for pair in eval_mention_pairs:
                     pred_labels.append(np.argmax(pred_scores[pair]))
 
                 # Evaluate the predictions
-                score_dict = nn_eval.evaluate_relations(eval_mention_pairs, pred_labels, gold_label_dict)
+                score_dict = \
+                    nn_eval.evaluate_relations(eval_mention_pairs, pred_labels,
+                                               gold_label_dict)
 
                 # Get the current coref / subset and see if their average beats our best
-                coref_subset_avg = score_dict.get_score('coref').f1 + score_dict.get_score('subset').f1
+                coref_subset_avg = score_dict.get_score('coref').f1 + \
+                                   score_dict.get_score('subset').f1
                 coref_subset_avg /= 2.0
                 if coref_subset_avg >= best_coref_subset_avg - 0.005:
                     log.info(None, "Previous best coref/subset average F1 of %.2f%% after %d epochs",
@@ -198,6 +199,9 @@ def predict(rel_type, encoding_scheme, embedding_type,
     """
     Wrapper for making predictions on a pre-trained model, already loaded into
     the session
+    :param rel_type:
+    :param encoding_scheme:
+    :param embedding_type:
     :param tf_session:
     :param batch_size:
     :param sentence_file:
@@ -224,8 +228,7 @@ def predict(rel_type, encoding_scheme, embedding_type,
     pred_scores, _ = nn_util.get_pred_scores_mcc(task, encoding_scheme,
                                                  tf_session, batch_size,
                                                  mention_pairs, data_dict,
-                                                 n_classes, N_EMBEDDING_WIDTH,
-                                                 log=log)
+                                                 n_classes, log)
 
     # log.warning("Skipping evaluation, since it takes way too long right now for some reason")
     log.info("Loading data from " + label_file)

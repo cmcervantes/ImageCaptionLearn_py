@@ -11,7 +11,6 @@ from nn_utils import data as nn_data
 from nn_utils import eval as nn_eval
 from nn_utils import core as nn_util
 from utils import core as util
-from utils import data as data_util
 from utils.Logger import Logger
 
 ___author___ = "ccervantes"
@@ -19,10 +18,6 @@ ___author___ = "ccervantes"
 N_EMBEDDING_WIDTH = 300
 N_BOX_WIDTH = 4096
 CLASSES = ['0', '1']
-
-data_norm = False
-encoding_scheme = None
-embedding_type = None
 task = "affinity"
 
 
@@ -90,7 +85,8 @@ def train(encoding_scheme, embedding_type,
           eval_sentence_file=None, eval_mention_idx_file=None,
           eval_feature_file=None, eval_feature_meta_file=None,
           eval_box_dir=None, eval_mention_box_label_file=None,
-          early_stopping=False, log=None):
+          early_stopping=False, box_category_file=None,
+          eval_box_category_file=None, log=None):
     """
     Trains a relation model
 
@@ -121,8 +117,7 @@ def train(encoding_scheme, embedding_type,
                                   the model should be evaluated
     :return:
     """
-    global CLASSES, N_EMBEDDING_WIDTH, N_BOX_WIDTH
-    task = "affinity"
+    global CLASSES, N_EMBEDDING_WIDTH, N_BOX_WIDTH, task
     n_classes = len(CLASSES)
 
     log.info("Loading training data")
@@ -130,14 +125,15 @@ def train(encoding_scheme, embedding_type,
     data_dict.update(nn_data.load_mentions(mention_idx_file, task,
                                            feature_file, feature_meta_file,
                                            n_classes))
-    data_dict.update(nn_data.load_boxes(mention_box_label_file))
+    data_dict.update(nn_data.load_boxes(mention_box_label_file, box_dir, box_category_file))
 
     log.info("Loading eval data")
     eval_data_dict = nn_data.load_sentences(eval_sentence_file, embedding_type)
     eval_data_dict.update(nn_data.load_mentions(eval_mention_idx_file, task,
                                                 eval_feature_file, eval_feature_meta_file,
                                                 n_classes))
-    eval_data_dict.update(nn_data.load_boxes(eval_mention_box_label_file))
+    eval_data_dict.update(nn_data.load_boxes(eval_mention_box_label_file, eval_box_dir,
+                                             eval_box_category_file))
 
     # Load mention box pairs, ignoring all those mentions
     # that aren't in our loaded data (for punctuation reasons)
@@ -151,6 +147,7 @@ def train(encoding_scheme, embedding_type,
                                     batch_size, start_hidden_width,
                                     hidden_depth, weighted_classes, activation,
                                     n_classes, data_dict['n_mention_feats'],
+                                    data_dict['box_embedding_width'],
                                     data_dict['n_box_feats'])
     loss = tf.get_collection('loss')[0]
     accuracy = tf.get_collection('accuracy')[0]
@@ -189,10 +186,7 @@ def train(encoding_scheme, embedding_type,
                 # Retrieve this batch
                 batch_mention_box_pairs = mention_box_pairs[start_idx:end_idx]
                 batch_tensors = nn_data.load_batch(batch_mention_box_pairs,
-                                                   data_dict, task,
-                                                   n_classes,
-                                                   N_EMBEDDING_WIDTH,
-                                                   N_BOX_WIDTH, box_dir)
+                                                   data_dict, task, n_classes)
 
                 # Train
                 nn_util.run_op(sess, train_op, [batch_tensors],
@@ -201,19 +195,12 @@ def train(encoding_scheme, embedding_type,
 
                 # Store the losses and accuracies every 100 batches
                 if (j+1) % 100 == 0:
-                    losses.append(nn_util.run_op(sess, loss,
-                                                 [batch_tensors],
-                                                 input_dropout,
-                                                 other_dropout,
-                                                 encoding_scheme,
-                                                 [task], [""], True))
-                    accuracies.append(nn_util.run_op(sess, accuracy,
-                                                     [batch_tensors],
-                                                     input_dropout,
-                                                     other_dropout,
-                                                     encoding_scheme,
-                                                     [task], [""],
-                                                     True))
+                    losses.append(nn_util.run_op(sess, loss, [batch_tensors],
+                                                 input_dropout, other_dropout,
+                                                 encoding_scheme, [task], [""], True))
+                    accuracies.append(nn_util.run_op(sess, accuracy,[batch_tensors],
+                                                     input_dropout, other_dropout,
+                                                     encoding_scheme, [task], [""], True))
                 #endif
                 start_idx = end_idx
                 end_idx = start_idx + batch_size
@@ -228,12 +215,9 @@ def train(encoding_scheme, embedding_type,
                 eval_mention_box_pairs = \
                     get_valid_mention_box_pairs(eval_data_dict)
                 pred_scores, gold_label_dict = \
-                    nn_util.get_pred_scores_mcc(task, encoding_scheme,
-                                                sess, batch_size,
-                                                eval_mention_box_pairs,
-                                                eval_data_dict, n_classes,
-                                                N_EMBEDDING_WIDTH, N_BOX_WIDTH,
-                                                eval_box_dir, log)
+                    nn_util.get_pred_scores_mcc(task, encoding_scheme, sess,
+                                                batch_size, eval_mention_box_pairs,
+                                                eval_data_dict, n_classes, log)
 
                 # If we do an argmax on the scores, we get the predicted labels
                 eval_mentions = list(pred_scores.keys())
@@ -245,7 +229,9 @@ def train(encoding_scheme, embedding_type,
                 #endfor
 
                 # Evaluate the predictions
-                score_dict = nn_eval.evaluate_multiclass(gold_labels, pred_labels, CLASSES, log)
+                score_dict = \
+                    nn_eval.evaluate_multiclass(gold_labels, pred_labels,
+                                                CLASSES, log)
 
                 # Get the current coref / subset and see if their average beats our best or
                 # within one point of our best (we keep stopping too early)
@@ -279,9 +265,24 @@ def predict(encoding_scheme, embedding_type,
             tf_session, batch_size, sentence_file,
             mention_idx_file, feature_file,
             feature_meta_file, box_dir, mention_box_label_file,
-            scores_file=None, log=None):
-    global CLASSES
-    task = "affinity"
+            box_category_file=None, scores_file=None, log=None):
+    """
+
+    :param encoding_scheme:
+    :param embedding_type:
+    :param tf_session:
+    :param batch_size:
+    :param sentence_file:
+    :param mention_idx_file:
+    :param feature_file:
+    :param feature_meta_file:
+    :param box_dir:
+    :param mention_box_label_file:
+    :param scores_file:
+    :param log:
+    :return:
+    """
+    global CLASSES, task
     n_classes = len(CLASSES)
 
     # Load the data
@@ -290,15 +291,15 @@ def predict(encoding_scheme, embedding_type,
     data_dict.update(nn_data.load_mentions(mention_idx_file, task,
                                            feature_file, feature_meta_file,
                                            n_classes))
-    data_dict.update(nn_data.load_boxes(mention_box_label_file))
+    data_dict.update(nn_data.load_boxes(mention_box_label_file,
+                                        box_dir, box_category_file))
 
     # Get the predicted scores, given our arguments
     mention_box_pairs = get_valid_mention_box_pairs(data_dict)
     pred_scores, gold_label_dict = \
         nn_util.get_pred_scores_mcc(task, encoding_scheme, tf_session,
                                     batch_size, mention_box_pairs,
-                                    data_dict, n_classes, N_EMBEDDING_WIDTH,
-                                    N_BOX_WIDTH, box_dir, log)
+                                    data_dict, n_classes, log)
 
     # If we do an argmax on the scores, we get the predicted labels
     mentions = list(pred_scores.keys())
@@ -393,14 +394,36 @@ def __init__():
     parser.add_argument("--embedding_type", choices=['w2v', 'glove'], default='w2v',
                         help="Word embedding type to use")
     parser.add_argument("--early_stopping", action='store_true',
-                        help="Whether to implement early stopping based on the "+
+                        help="Whether to implement early stopping based on the "
                              "evaluation performance")
+    parser.add_argument("--mention_box_label_file",
+                        type=lambda f: util.arg_path_exists(parser, f),
+                        help="Label file; overrides the default path from by combining "
+                             "data_dir, data, and split arguments")
+    parser.add_argument("--eval_mention_box_label_file",
+                        type=lambda f: util.arg_path_exists(parser, f),
+                        help="Label file for eval data; overrides default")
+    parser.add_argument("--box_category_file",
+                        type=lambda f: util.arg_path_exists(parser, f),
+                        help="File containing box category one-hots, which are"
+                             "added to bounding box representations")
+    parser.add_argument("--eval_box_category_file",
+                        type=lambda f: util.arg_path_exists(parser, f),
+                        help="Box category one-hot file for evaluation data")
     args = parser.parse_args()
     arg_dict = vars(args)
 
-    if arg_dict['train']:
+    if arg_dict['train'] and arg_dict['model_file'] is None:
+        model_suffix = "affinity_lstm"
+
+        # This is definitely hacky and should be removed
+        if arg_dict['box_category_file'] is not None:
+            model_suffix += "_cat"
+        if arg_dict['mention_box_label_file'] is not None and \
+           'heur' in arg_dict['mention_box_label_file']:
+            model_suffix += "_complete"
         arg_dict['model_file'] = "/home/ccervan2/models/tacl201712/" + \
-                                 nn_data.build_model_filename(arg_dict, "affinity_lstm")
+                                 nn_data.build_model_filename(arg_dict, model_suffix)
     model_file = arg_dict['model_file']
     util.dump_args(arg_dict, log)
 
@@ -424,6 +447,16 @@ def __init__():
         eval_feature_meta_file = data_dir + "feats/" + eval_data_root + "_card_meta.json"
         eval_mention_box_label_file = data_dir + "raw/" + eval_data_root + "_mention_box_labels.txt"
     #endif
+
+    # Override the label files, if specified
+    if arg_dict['mention_box_label_file'] is not None:
+        mention_box_label_file = arg_dict['mention_box_label_file']
+    if arg_dict['eval_mention_box_label_file'] is not None:
+        eval_mention_box_label_file = arg_dict['eval_mention_box_label_file']
+
+    # Get the category file, if specified
+    box_category_file = arg_dict['box_category_file']
+    eval_box_category_file = arg_dict['eval_box_category_file']
 
     # Load the appropriate word embeddings
     embedding_type = arg_dict['embedding_type']
@@ -464,8 +497,12 @@ def __init__():
               eval_mention_idx_file=eval_mention_idx_file,
               eval_feature_file=eval_feature_file,
               eval_feature_meta_file=eval_feature_meta_file,
-              eval_box_dir=eval_box_dir, eval_mention_box_label_file=eval_mention_box_label_file,
-              early_stopping=arg_dict['early_stopping'], log=log)
+              eval_box_dir=eval_box_dir,
+              eval_mention_box_label_file=eval_mention_box_label_file,
+              early_stopping=arg_dict['early_stopping'],
+              box_category_file=box_category_file,
+              eval_box_category_file=eval_box_category_file,
+              log=log)
     elif arg_dict['predict']:
         scores_file = data_dir + "scores/" + data_root + "_affinity_lstm.scores"
 
@@ -485,7 +522,9 @@ def __init__():
                     feature_meta_file=feature_meta_file,
                     box_dir=box_dir,
                     mention_box_label_file=mention_box_label_file,
-                    scores_file=scores_file, log=log)
+                    scores_file=scores_file,
+                    box_category_file=box_category_file,
+                    log=log)
         #endwith
     #endif
 #enddef

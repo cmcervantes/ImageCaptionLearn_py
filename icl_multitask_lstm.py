@@ -41,7 +41,7 @@ def setup(multitask_scheme, lstm_hidden_width, data_norm, start_hidden_width,
     :param encoding_scheme:
     :param task_data_dicts:
     :param batch_size:
-    :param task_batch_size:
+    :param task_batch_sizes:
     :return:
     """
     global TASK_CLASS_DICT, TASKS
@@ -59,7 +59,10 @@ def setup(multitask_scheme, lstm_hidden_width, data_norm, start_hidden_width,
         with tf.variable_scope(task):
             # Retrieve the number of mention and box features
             n_mention_feats = task_data_dicts[task]['n_mention_feats']
+            box_embedding_width = None
             n_box_feats = None
+            if 'box_embedding_width' in task_data_dicts[task].keys():
+                box_embedding_width = task_data_dicts[task]['box_embedding_width']
             if 'n_box_feats' in task_data_dicts[task].keys():
                 n_box_feats = task_data_dicts[task]['n_box_feats']
 
@@ -75,7 +78,8 @@ def setup(multitask_scheme, lstm_hidden_width, data_norm, start_hidden_width,
                                             task_batch_size, start_hidden_width,
                                             hidden_depth, weighted_classes,
                                             activation, n_classes,
-                                            n_mention_feats, n_box_feats)
+                                            n_mention_feats, box_embedding_width,
+                                            n_box_feats)
             task_vars[task] = dict()
             task_vars[task]['loss'] = tf.get_collection(task + '/loss')[0]
             task_vars[task]['accuracy'] = tf.get_collection(task + '/accuracy')[0]
@@ -142,7 +146,9 @@ def shuffle_mention_box_pairs(mention_box_pairs):
 #endfor
 
 
-def load_data(data_dir, data, split, embedding_type, log=None):
+def load_data(data_dir, data, split, embedding_type,
+              mention_box_label_file=None, box_category_file=None,
+              log=None):
     """
     Loads all of the data for all tasks
     :param data_dir:
@@ -178,6 +184,8 @@ def load_data(data_dir, data, split, embedding_type, log=None):
             feature_meta_file += task
             if task == 'affinity':
                 label_file = data_dir + "raw/" + data_root + "_mention_box_labels.txt"
+                if mention_box_label_file is not None:
+                    label_file = mention_box_label_file
         #endif
         mention_idx_file += ".txt"
         feature_file += ".feats"
@@ -192,9 +200,10 @@ def load_data(data_dir, data, split, embedding_type, log=None):
             task_data_dicts[task]['gold_label_dict'] = \
                 nn_data.load_relation_labels(label_file)
         elif task == "affinity":
-            task_data_dicts[task]['box_dir'] = data_dir + "feats/" + \
-                                               data + "_boxes/" + split + "/"
-            task_data_dicts[task].update(nn_data.load_boxes(label_file))
+            box_dir = data_dir + "feats/" + data + "_boxes/" + split + "/"
+            task_data_dicts[task].update(nn_data.load_boxes(label_file,
+                                                            box_dir,
+                                                            box_category_file))
         #endif
     #endfor
     return task_data_dicts
@@ -295,14 +304,10 @@ def train_jointly(multitask_scheme, epochs, batch_size, lstm_input_dropout,
                         batch_ids.extend(ids[0:remainder])
                         sample_indices[task] = remainder
                     #endif
-                    box_dir = None
-                    if task == 'affinity':
-                        box_dir = task_data_dicts[task]['box_dir']
                     batch_tensor_dicts.append(nn_data.load_batch(batch_ids,
                                                                  task_data_dicts[task],
-                                                                 task, len(TASK_CLASS_DICT[task]),
-                                                                 N_EMBEDDING_WIDTH, N_BOX_WIDTH,
-                                                                 box_dir))
+                                                                 task,
+                                                                 len(TASK_CLASS_DICT[task])))
                 #endfor
 
                 # It so happens that I'm using task names as variable
@@ -318,17 +323,12 @@ def train_jointly(multitask_scheme, epochs, batch_size, lstm_input_dropout,
 
             for task in TASKS:
                 eval_ids = eval_task_ids[task]
-                box_dir = None
-                if task == 'affinity':
-                    box_dir = eval_task_data_dicts[task]['box_dir']
                 with tf.variable_scope(task):
                     pred_scores, gold_label_dict = \
                         nn_util.get_pred_scores_mcc(task, encoding_scheme, sess,
                                                     batch_size, eval_ids,
                                                     eval_task_data_dicts[task],
-                                                    len(TASK_CLASS_DICT[task]),
-                                                    N_EMBEDDING_WIDTH, N_BOX_WIDTH,
-                                                    box_dir, log)
+                                                    len(TASK_CLASS_DICT[task]), log)
 
                 # If we do an argmax on the scores, we get the predicted labels
                 pred_labels = list()
@@ -341,14 +341,12 @@ def train_jointly(multitask_scheme, epochs, batch_size, lstm_input_dropout,
 
                 # Evaluate the predictions
                 if 'rel' in task:
-                    score_dict = \
-                        nn_eval.evaluate_relations(eval_ids, pred_labels,
-                                                   eval_task_data_dicts[task]['gold_label_dict'],
-                                                   log)
+                    nn_eval.evaluate_relations(eval_ids, pred_labels,
+                                               eval_task_data_dicts[task]['gold_label_dict'],
+                                               log)
                 else:
-                    score_dict = \
-                        nn_eval.evaluate_multiclass(gold_labels, pred_labels,
-                                                    TASK_CLASS_DICT[task], log)
+                    nn_eval.evaluate_multiclass(gold_labels, pred_labels,
+                                                TASK_CLASS_DICT[task], log)
                 #endif
 
             #endfor
@@ -428,14 +426,9 @@ def train_alternately(epochs, task_batch_sizes, lstm_input_dropout,
                 log.log_status('info', None, "Completed %d (%.2f%%) iterations",
                                j, 100.0 * j / len(batch_ids))
                 task, ids = batch_ids[j]
-                box_dir = None
-                if task == 'affinity':
-                    box_dir = task_data_dicts[task]['box_dir']
                 batch_tensor = \
                     nn_data.load_batch(ids, task_data_dicts[task],
-                                       task, len(TASK_CLASS_DICT[task]),
-                                       N_EMBEDDING_WIDTH, N_BOX_WIDTH,
-                                       box_dir)
+                                       task, len(TASK_CLASS_DICT[task]))
 
                 # Run the operation for this task
                 nn_util.run_op(sess, train_ops[task],
@@ -449,17 +442,12 @@ def train_alternately(epochs, task_batch_sizes, lstm_input_dropout,
             saver.save(sess, model_file)
             for task in TASKS:
                 eval_ids = eval_task_ids[task]
-                box_dir = None
-                if task == 'affinity':
-                    box_dir = eval_task_data_dicts[task]['box_dir']
                 with tf.variable_scope(task):
                     pred_scores, gold_label_dict = \
                         nn_util.get_pred_scores_mcc(task, encoding_scheme, sess,
                                                     task_batch_sizes[task], eval_ids,
                                                     eval_task_data_dicts[task],
-                                                    len(TASK_CLASS_DICT[task]),
-                                                    N_EMBEDDING_WIDTH, N_BOX_WIDTH,
-                                                    box_dir, log)
+                                                    len(TASK_CLASS_DICT[task]), log)
 
                 # If we do an argmax on the scores, we get the predicted labels
                 pred_labels = list()
@@ -472,14 +460,12 @@ def train_alternately(epochs, task_batch_sizes, lstm_input_dropout,
 
                 # Evaluate the predictions
                 if 'rel' in task:
-                    score_dict = \
-                        nn_eval.evaluate_relations(eval_ids, pred_labels,
-                                                   eval_task_data_dicts[task]['gold_label_dict'],
-                                                   log)
+                    nn_eval.evaluate_relations(eval_ids, pred_labels,
+                                               eval_task_data_dicts[task]['gold_label_dict'],
+                                               log)
                 else:
-                    score_dict = \
-                        nn_eval.evaluate_multiclass(gold_labels, pred_labels,
-                                                    TASK_CLASS_DICT[task], log)
+                    nn_eval.evaluate_multiclass(gold_labels, pred_labels,
+                                                TASK_CLASS_DICT[task], log)
                 #endif
             #endfor
         #endfor
@@ -509,9 +495,6 @@ def predict(sess, multitask_scheme, encoding_scheme,
 
     for task in TASKS:
         eval_ids = task_ids[task]
-        box_dir = None
-        if task == 'affinity':
-            box_dir = task_data_dicts[task]['box_dir']
         task_batch_size = batch_size
         if multitask_scheme == 'alternate':
             task_batch_size = task_batch_sizes[task]
@@ -520,9 +503,7 @@ def predict(sess, multitask_scheme, encoding_scheme,
                 nn_util.get_pred_scores_mcc(task, encoding_scheme, sess,
                                             task_batch_size, eval_ids,
                                             task_data_dicts[task],
-                                            len(TASK_CLASS_DICT[task]),
-                                            N_EMBEDDING_WIDTH, N_BOX_WIDTH,
-                                            box_dir, log)
+                                            len(TASK_CLASS_DICT[task]), log)
 
             # If we do an argmax on the scores, we get the predicted labels
             mentions = list(pred_scores.keys())
@@ -536,14 +517,12 @@ def predict(sess, multitask_scheme, encoding_scheme,
 
             # Evaluate the predictions
             if 'rel' in task:
-                score_dict = \
-                    nn_eval.evaluate_relations(eval_ids, pred_labels,
-                                               task_data_dicts[task]['gold_label_dict'],
-                                               log)
+                nn_eval.evaluate_relations(eval_ids, pred_labels,
+                                           task_data_dicts[task]['gold_label_dict'],
+                                           log)
             else:
-                score_dict = \
-                    nn_eval.evaluate_multiclass(gold_labels, pred_labels,
-                                                TASK_CLASS_DICT[task], log)
+                nn_eval.evaluate_multiclass(gold_labels, pred_labels,
+                                            TASK_CLASS_DICT[task], log)
             #endif
 
             # Write the scores file for this task
@@ -636,6 +615,20 @@ def __init__():
                         choices=["simple_joint", "weighted_joint", "alternate"],
                         default="simple_joint",
                         help="Multitask learning scheme")
+    parser.add_argument("--mention_box_label_file",
+                        type=lambda f: util.arg_path_exists(parser, f),
+                        help="Label file; overrides the default path from by combining "
+                             "data_dir, data, and split arguments")
+    parser.add_argument("--eval_mention_box_label_file",
+                        type=lambda f: util.arg_path_exists(parser, f),
+                        help="Label file for eval data; overrides default")
+    parser.add_argument("--box_category_file",
+                        type=lambda f: util.arg_path_exists(parser, f),
+                        help="File containing box category one-hots, which are"
+                             "added to bounding box representations")
+    parser.add_argument("--eval_box_category_file",
+                        type=lambda f: util.arg_path_exists(parser, f),
+                        help="Box category one-hot file for evaluation data")
     args = parser.parse_args()
     arg_dict = vars(args)
 
@@ -661,13 +654,24 @@ def __init__():
         nn_data.init_glove()
     #endif
 
+    # Override the label files, if specified
+    mention_box_label_file = arg_dict['mention_box_label_file']
+    eval_mention_box_label_file = arg_dict['eval_mention_box_label_file']
+
+    # Get the category file, if specified
+    box_category_file = arg_dict['box_category_file']
+    eval_box_category_file = arg_dict['eval_box_category_file']
+
     # Load the data
     task_data_dicts = load_data(arg_dict['data_dir'] + "/", arg_dict['data'],
-                                arg_dict['split'], embedding_type, log)
+                                arg_dict['split'], embedding_type,
+                                mention_box_label_file, box_category_file, log)
     eval_task_data_dicts = dict()
     if train_model:
         eval_task_data_dicts = load_data(arg_dict['data_dir'] + "/", arg_dict['eval_data'],
-                                         arg_dict['eval_split'], embedding_type, log)
+                                         arg_dict['eval_split'], embedding_type,
+                                         eval_mention_box_label_file,
+                                         eval_box_category_file, log)
 
     # Set the random seeds identically every run
     nn_util.set_random_seeds()
@@ -734,7 +738,9 @@ def __init__():
         with tf.Session() as sess:
             saver = tf.train.import_meta_graph(model_file + ".meta")
             saver.restore(sess, model_file)
-            predict(sess, task_data_dicts, task_ids, log)
+            predict(sess, multitask_scheme, task_data_dicts,
+                    task_ids, batch_size=arg_dict['batch_size'],
+                    task_batch_sizes=task_batch_sizes, log=log)
 #enddef
 
 __init__()

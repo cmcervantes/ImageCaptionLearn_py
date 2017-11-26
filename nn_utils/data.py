@@ -13,6 +13,8 @@ __w2v = None
 __WORD_2_VEC_PATH = '/shared/projects/word2vec/GoogleNews-vectors-negative300.bin.gz'
 __GLOVE_PATH = '/home/ccervan2/data/tacl201711/coco30k_train_glove.vec'
 __GLOVE_DICT = None
+__WORD_EMBEDDING_WIDTH = 300
+__BOX_EMBEDDING_WIDTH = 4096
 
 
 def init_w2v():
@@ -80,7 +82,7 @@ def load_sentences(sentence_file, embedding_type='w2v'):
     :param embedding_type: Type of embeddings to use (w2v, glove)
     :return:
     """
-    global __w2v
+    global __w2v, __WORD_EMBEDDING_WIDTH
     data_dict = dict()
 
     # Load the sentence file, which we assume is
@@ -109,6 +111,10 @@ def load_sentences(sentence_file, embedding_type='w2v'):
         if len(sentence_matrix) > data_dict['max_seq_len']:
             data_dict['max_seq_len'] = len(sentence_matrix)
     #endfor
+
+    # We have a set number of embedding widths
+    data_dict['word_embedding_width'] = __WORD_EMBEDDING_WIDTH
+
     return data_dict
 #enddef
 
@@ -177,17 +183,18 @@ def load_mentions(mention_idx_file, task, feats_file, feats_meta_file, n_classes
     # Add the feature files to the data dict
     if feats_file is not None and feats_meta_file is not None:
         meta_dict = json.load(open(feats_meta_file, 'r'))
-        data_dict['n_mention_feats'] = meta_dict['max_idx']
+        data_dict['n_mention_feats'] = meta_dict['max_idx'] + 1
         X, _, IDs = data_util.load_sparse_feats(feats_file, meta_dict)
         data_dict['mention_features'] = dict()
         for i in range(0, len(IDs)):
             data_dict['mention_features'][IDs[i]] = X[i]
     #endif
+
     return data_dict
 #enddef
 
 
-def load_boxes(mention_box_label_file):
+def load_boxes(mention_box_label_file, box_dir, box_category_file=None):
     """
     Reads the box index file, mapping mention/box indices with
     labels and loads all box features from the box_dir
@@ -195,6 +202,7 @@ def load_boxes(mention_box_label_file):
     :param mention_box_label_file: File containing box/mention affinity labels
     :return: Dictionary storing the aforementioned dictionaries
     """
+    global __BOX_EMBEDDING_WIDTH
     data_dict = dict()
 
     # Retrieve the one-hot mention/box labels from the file
@@ -208,8 +216,29 @@ def load_boxes(mention_box_label_file):
         #endfor
     #endwith
 
-    # We have a set number of box embedding widths
-    data_dict['n_box_feats'] = 4095
+    # If a box-category file has been specified,
+    # load its categories
+    data_dict['box_categories'] = dict()
+    data_dict['n_box_feats'] = None
+    if box_category_file is not None:
+        with open(box_category_file, 'r') as f:
+            for line in f.readlines():
+                line_split = line.strip().split("\t")
+                vec = list()
+                for i in line_split[1].split(","):
+                    vec.append(float(i))
+                data_dict['n_box_feats'] = max(data_dict['n_box_feats'], len(vec))
+                data_dict['box_categories'][line_split[0].strip()] = np.array(vec)
+            #endfor
+        #endwith
+    #endif
+
+    # Store the box directory in the data dict so other methods
+    # can pull it from this and we don't have to keep passing it around
+    data_dict['box_dir'] = box_dir
+
+    # We have a set number of embedding widths
+    data_dict['box_embedding_width'] = __BOX_EMBEDDING_WIDTH
 
     return data_dict
 #enddef
@@ -290,9 +319,7 @@ def load_relation_labels(filename):
 #enddef
 
 
-def load_batch(ids, data_dict, task,
-               n_classes, n_embedding_widths=300,
-               n_box_widths=4096, box_dir=None):
+def load_batch(ids, data_dict, task, n_classes):
     """
     Loads a batch of data, given a list of IDs,
     a data dictionary, the task we're retrieving
@@ -305,9 +332,6 @@ def load_batch(ids, data_dict, task,
     :param task: {rel_intra, rel_cross, nonvis,
                   card, affinity}
     :param n_classes: Number of classes, for the task
-    :param n_embedding_widths: Width of word embeddings
-    :param n_box_widths: Width of fast RCNN features
-    :param box_dir: Directories with bounding box features
     :return: Batch tensors
     """
 
@@ -321,7 +345,8 @@ def load_batch(ids, data_dict, task,
         n_seq = 2 * batch_size
 
     # Populate our sentence tensor and sequence length array
-    batch_tensors['sentences'] = np.zeros([n_seq, data_dict['max_seq_len'], n_embedding_widths])
+    batch_tensors['sentences'] = np.zeros([n_seq, data_dict['max_seq_len'],
+                                           data_dict['word_embedding_width']])
     batch_tensors['seq_lengths'] = np.zeros([n_seq])
     batch_idx = 0
     for i in range(0, batch_size):
@@ -370,7 +395,10 @@ def load_batch(ids, data_dict, task,
         m_id, b_id = ids[0].split("|")
         batch_tensors['m_feats'] = np.zeros([batch_size,
                                              len(data_dict['mention_features'][m_id])])
-        batch_tensors['b_feats'] = np.zeros([batch_size, n_box_widths])
+        batch_tensors['box_embeddings'] = np.zeros([batch_size,
+                                                    data_dict['box_embedding_width']])
+        if data_dict['box_categories']:
+            batch_tensors['b_feats'] = np.zeros([batch_size, data_dict['n_box_feats']])
     else:
         n_features = len(data_dict['mention_features'][ids[0]])
         batch_tensors['m_feats'] = np.zeros([batch_size, n_features])
@@ -378,7 +406,7 @@ def load_batch(ids, data_dict, task,
 
     # We're going to keep a dictionary of ids -> box features
     # for the current image we're looking at
-    box_feature_dict = dict()
+    box_embedding_dict = dict()
     loaded_box_ids = set()
 
     # Iterate through the IDs, loading our data
@@ -442,27 +470,31 @@ def load_batch(ids, data_dict, task,
         # box features into memory -- which is unrealistic --
         # we're going to open files as we need them
         if task == 'affinity':
-            if b_id in loaded_box_ids:
-                # If this box is in the set of loaded boxes, just retrieve it
-                batch_tensors['b_feats'][i] = box_feature_dict[b_id]
-            else:
-                # If this box is not in the set of loaded boxes,
-                # we need to open the appropriate file and
-                # load all the boxes for that image; this is naturally
-                # a horribly inefficient idea if we have truly
-                # random boxes, but if we're ordering mention/box
-                # pairs as random _per image_ then we're only
-                # opening a new file at most
-                #       max_n_boxes / batch_size + 2
+            # Add features, if we have any to add
+            # UPDATE: apparently empty dictionaries evaluate to false in python
+            if data_dict['box_categories']:
+                if b_id in data_dict['box_categories'].keys():
+                    batch_tensors['b_feats'][i] = data_dict['box_categories'][b_id]
+
+            # If this box isn't in the set of loaded boxes, we need to open
+            # the appropriate file and load all boxes for that image;
+            # This is naturally horribly inefficient if we randomly shuffle boxes,
+            # but we're relying on the affinity classifiers to order mention/box
+            # pairs by image, that way we open a new file at most
+            #   max_n_boxes / batch_size + 2
+            # times
+            if b_id not in loaded_box_ids:
                 img_id = b_id.split(";")[0]
                 box_features, _, box_ids = \
-                    data_util.load_sparse_feats(box_dir + "/" +
+                    data_util.load_sparse_feats(data_dict['box_dir'] + "/" +
                                                 img_id.replace('.jpg', '.feats'),
-                                                None, None, n_box_widths)
+                                                None, None,
+                                                data_dict['box_embedding_width'])
                 for j in range(0, len(box_ids)):
-                    box_feature_dict[box_ids[j]] = box_features[j]
+                    box_embedding_dict[box_ids[j]] = box_features[j]
                 loaded_box_ids = set(box_ids)
             #endif
+            batch_tensors['box_embeddings'][i] = box_embedding_dict[b_id]
     #endfor
 
     return batch_tensors

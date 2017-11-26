@@ -129,7 +129,7 @@ def train(task, encoding_scheme, embedding_type,
                 # Retrieve this batch
                 batch_mentions = mentions[start_idx:end_idx]
                 batch_tensors = nn_data.load_batch(batch_mentions, data_dict, task,
-                                                   n_classes, N_EMBEDDING_WIDTH)
+                                                   n_classes)
 
                 # Train
                 nn_util.run_op(sess, train_op, [batch_tensors], lstm_input_dropout,
@@ -158,8 +158,7 @@ def train(task, encoding_scheme, embedding_type,
                 pred_scores, gold_label_dict = \
                     nn_util.get_pred_scores_mcc(task, encoding_scheme,
                                                 sess, batch_size, eval_mentions,
-                                                eval_data_dict, n_classes,
-                                                N_EMBEDDING_WIDTH, log=log)
+                                                eval_data_dict, n_classes, log)
 
                 # If we do an argmax on the scores, we get the predicted labels
                 eval_mentions = list(pred_scores.keys())
@@ -171,7 +170,8 @@ def train(task, encoding_scheme, embedding_type,
                 #endfor
 
                 # Evaluate the predictions
-                score_dict = nn_eval.evaluate_multiclass(gold_labels, pred_labels, classes, log)
+                score_dict = nn_eval.evaluate_multiclass(gold_labels, pred_labels,
+                                                         classes, log)
 
                 # Get the current scores and see if their average beats our best
                 # by half a point (if we're stopping early)
@@ -223,7 +223,7 @@ def predict(task, encoding_scheme, embedding_type,
     pred_scores, gold_label_dict = \
         nn_util.get_pred_scores_mcc(task, encoding_scheme, tf_session,
                                     batch_size, mentions, data_dict,
-                                    n_classes, N_EMBEDDING_WIDTH, log=log)
+                                    n_classes, log)
 
     # If we do an argmax on the scores, we get the predicted labels
     pred_labels = list()
@@ -313,6 +313,8 @@ def __init__():
     parser.add_argument("--early_stopping", action='store_true',
                         help="Whether to implement early stopping based on the "+
                              "evaluation performance")
+    parser.add_argument("--skip_epoch_eval", action='store_true',
+                        help='Skips evaluation each epoch during training')
     parser.add_argument("--encoding_scheme",
                         choices=['first_last_sentence', 'first_last_mention'],
                         default='first_last_mention')
