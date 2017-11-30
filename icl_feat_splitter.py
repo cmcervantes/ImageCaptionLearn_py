@@ -7,10 +7,11 @@ from utils.Logger import Logger
 
 log = Logger(lvl='debug', delay=45)
 parser = ArgumentParser("ImageCaptionLearn_py: Feature File Splitter")
-parser.add_argument("--feats_file", type=str, help="The feature file to split into " +
+parser.add_argument("--feats_file", type=str, help="The feature file to split into "
                     "intra-caption and inter-caption files")
 parser.add_argument('--ordered_intra', action='store_true',
-        help='Whether to split intra-caption file into ordered ij and ji files')
+                     help='Whether to produce ordered ij/ji intra files (in '
+                          'addition to the complete intra file)')
 args = parser.parse_args()
 arg_dict = vars(args)
 util.dump_args(arg_dict, log)
@@ -49,6 +50,8 @@ with open(feats_file, 'r') as f:
     #endfor
 #endwith
 
+
+
 if arg_dict['ordered_intra']:
     with open(feats_file.replace(".feats", "_intra_ij.feats"), 'w') as f:
         for line in intra_cap_ij:
@@ -56,14 +59,14 @@ if arg_dict['ordered_intra']:
     with open(feats_file.replace(".feats", "_intra_ji.feats"), 'w') as f:
         for line in intra_cap_ji:
             f.write(line)
-else:
-    with open(feats_file.replace(".feats", "_intra.feats"), 'w') as f:
-        for line in intra_cap_ij:
-            f.write(line)
-        for line in intra_cap_ji:
-            f.write(line)
 #endif
 
-with open(feats_file.replace(".feats", "_inter.feats"), 'w') as f:
+with open(feats_file.replace(".feats", "_intra.feats"), 'w') as f:
+    for line in intra_cap_ij:
+        f.write(line)
+    for line in intra_cap_ji:
+        f.write(line)
+
+with open(feats_file.replace(".feats", "_cross.feats"), 'w') as f:
     for line in inter_cap:
         f.write(line)

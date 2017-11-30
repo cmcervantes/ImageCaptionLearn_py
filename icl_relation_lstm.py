@@ -7,6 +7,7 @@ import tensorflow as tf
 from nn_utils import core as nn_util
 from nn_utils import data as nn_data
 from nn_utils import eval as nn_eval
+from utils import string as string_util
 from utils import core as util
 from utils.Logger import Logger
 
@@ -25,7 +26,8 @@ def train(rel_type, encoding_scheme, embedding_type,
           adam_epsilon, clip_norm, data_norm, activation, model_file=None,
           eval_sentence_file=None, eval_mention_idx_file=None,
           eval_feature_file=None, eval_feature_meta_file=None,
-          eval_label_file=None, early_stopping=False, log=None):
+          eval_label_file=None, early_stopping=False,
+          ordered_pairs=False, log=None):
     """
     Trains a relation model
 
@@ -150,16 +152,32 @@ def train(rel_type, encoding_scheme, embedding_type,
                      sum(losses) / float(len(losses)),
                      100.0 * sum(accuracies) / float(len(accuracies)))
             saver.save(sess, model_file)
-            if eval_sentence_file is not None and eval_mention_idx_file is not None:
+            if (i+1) % 10 == 0 and eval_sentence_file is not None and eval_mention_idx_file is not None:
+                # We want to predict over all mentions unless this is our weird
+                # ij intra caption case, in which case we want predictions
+                # only for the ij pairs
                 eval_mention_pairs = eval_data_dict['mention_indices'].keys()
+                if ordered_pairs:
+                    eval_mention_pairs = get_ij_pairs(eval_mention_pairs)
+
+                # Predict scores
                 pred_scores, _ = nn_util.get_pred_scores_mcc(task, encoding_scheme,
                                                              sess, batch_size,
                                                              eval_mention_pairs,
                                                              eval_data_dict,
                                                              n_classes, log)
+
+                # If this is our ij intra case, we need to induce scores
+                # for ji pairs and reset what we consider as the complete set
+                # of mention pairs
+                if ordered_pairs:
+                    pred_scores = induce_ji_predictions(pred_scores)
+                    eval_mention_pairs = eval_data_dict['mention_indices'].keys()
+
                 pred_labels = list()
                 for pair in eval_mention_pairs:
                     pred_labels.append(np.argmax(pred_scores[pair]))
+
 
                 # Evaluate the predictions
                 score_dict = \
@@ -192,10 +210,47 @@ def train(rel_type, encoding_scheme, embedding_type,
 #enddef
 
 
+def get_ij_pairs(mention_pairs):
+    ij_pairs = list()
+    for pair in mention_pairs:
+        pair_dict = string_util.kv_str_to_dict(pair)
+        if pair_dict['caption_1'] == pair_dict['caption_2'] and \
+           int(pair_dict['mention_1']) < int(pair_dict['mention_2']):
+            ij_pairs.append(pair)
+    #endfor
+    return ij_pairs
+#enddef
+
+
+def induce_ji_predictions(pred_scores):
+    for ij_pair in pred_scores.keys():
+        # Split the ij pair label into its constituent elements so we
+        # can construct the ji pair; Recall that a mention pair ID is
+        #   doc:<ID>;caption_1:<idx>;mention_1:<idx>;caption_2:<idx>;mention_2:<idx>
+        ij_pair_dict = string_util.kv_str_to_dict(ij_pair)
+        ji_pair = "doc:" + ij_pair_dict['doc'] + \
+                  ";caption_1:" + ij_pair_dict['caption_2'] + \
+                  ";mention_1:" + ij_pair_dict['mention_2'] + \
+                  ";caption_2:" + ij_pair_dict['caption_1'] + \
+                  ";mention_2:" + ij_pair_dict['mention_1']
+
+        # The scores for ji are the same predictions for coref and null,
+        # but flipped for sub/supset
+        pred_scores[ji_pair] = np.zeros(len(CLASSES))
+        pred_scores[ji_pair][:] = pred_scores[ij_pair]
+        pred_scores[ji_pair][2] = pred_scores[ij_pair][3]
+        pred_scores[ji_pair][3] = pred_scores[ij_pair][2]
+    #endfor
+    return pred_scores
+#enddef
+
+
+
 def predict(rel_type, encoding_scheme, embedding_type,
             tf_session, batch_size, sentence_file,
             mention_idx_file, feature_file,
-            feature_meta_file, label_file, scores_file=None, log=None):
+            feature_meta_file, label_file, scores_file=None,
+            ordered_pairs=False, log=None):
     """
     Wrapper for making predictions on a pre-trained model, already loaded into
     the session
@@ -225,12 +280,16 @@ def predict(rel_type, encoding_scheme, embedding_type,
     # Get the predicted scores, given our arguments
     log.info("Predictiong scores")
     mention_pairs = data_dict['mention_indices'].keys()
+    if ordered_pairs:
+        mention_pairs = get_ij_pairs(mention_pairs)
     pred_scores, _ = nn_util.get_pred_scores_mcc(task, encoding_scheme,
                                                  tf_session, batch_size,
                                                  mention_pairs, data_dict,
                                                  n_classes, log)
+    if ordered_pairs:
+        pred_scores = induce_ji_predictions(pred_scores)
+        mention_pairs = data_dict['mention_indices'].keys()
 
-    # log.warning("Skipping evaluation, since it takes way too long right now for some reason")
     log.info("Loading data from " + label_file)
     gold_label_dict = nn_data.load_relation_labels(label_file)
 
@@ -274,15 +333,15 @@ def __init__():
                             "and su(p)erset labels")
     parser.add_argument("--epochs", type=int, default=20,
                         help="train opt; number of times to iterate over the dataset")
-    parser.add_argument("--batch_size", type=int, default=100,
+    parser.add_argument("--batch_size", type=int, default=512,
                         help="train opt; number of random mention pairs per batch")
     parser.add_argument("--lstm_hidden_width", type=int, default=200,
                         help="train opt; number of hidden units within "
                              "the LSTM cells")
-    parser.add_argument("--start_hidden_width", type=int, default=150,
+    parser.add_argument("--start_hidden_width", type=int, default=512,
                         help="train opt; number of hidden units in the "
                              "layer after the LSTM")
-    parser.add_argument("--hidden_depth", type=int, default=1,
+    parser.add_argument("--hidden_depth", type=int, default=2,
                         help="train opt; number of hidden layers after the "
                              "lstm, where each is last_width/2 units wide, "
                              "starting with start_hidden_width")
@@ -297,13 +356,13 @@ def __init__():
                         help='train opt; global clip norm value')
     parser.add_argument("--data_norm", action='store_true',
                         help="train opt; Whether to L2-normalize the w2v word vectors")
-    parser.add_argument("--lstm_input_dropout", type=float, default=1.0,
+    parser.add_argument("--lstm_input_dropout", type=float, default=0.5,
                         help="train opt; probability to keep lstm input nodes")
-    parser.add_argument("--dropout", type=float, default=1.0,
+    parser.add_argument("--dropout", type=float, default=0.5,
                         help="train opt; probability to keep all other nodes")
     parser.add_argument("--encoding_scheme",
                         choices=["first_last_sentence", 'first_last_mention'],
-                        default="first_last_sentence",
+                        default="first_last_mention",
                         help="train opt; specifies how lstm outputs are transformed")
     parser.add_argument("--data_dir", required=True,
                         type=lambda f: util.arg_path_exists(parser, f),
@@ -318,7 +377,8 @@ def __init__():
                         help='train opt; which nonlinear activation function to use')
     parser.add_argument("--predict", action='store_true',
                         help='Predicts using pre-trained model')
-    parser.add_argument("--rel_type", choices=['intra', 'cross'], required=True,
+    parser.add_argument("--rel_type", choices=['intra', 'ordered_intra', 'cross'],
+                        required=True,
                         help="Whether we're dealing with intra-caption or "
                              "cross-caption relations")
     parser.add_argument("--model_file", #required=True,
@@ -332,8 +392,12 @@ def __init__():
     arg_dict = vars(args)
 
     rel_type = arg_dict['rel_type']
+    ordered_pairs = False
+    if rel_type == 'ordered_intra':
+        rel_type = 'intra'
+        ordered_pairs = True
     if arg_dict['train']:
-        arg_dict['model_file'] = "/home/ccervan2/models/tacl201712/" + \
+        arg_dict['model_file'] = "/home/ccervan2/models/tacl201801/" + \
                                     nn_data.build_model_filename(arg_dict, "rel_lstm")
     model_file = arg_dict['model_file']
     util.dump_args(arg_dict, log)
@@ -343,16 +407,30 @@ def __init__():
     data_root = arg_dict['data_root']
     eval_data_root = arg_dict['eval_data_root']
     sentence_file = data_dir + "raw/" + data_root + "_captions.txt"
-    mention_idx_file = data_dir + "raw/" + data_root + "_mentionPairs_" + rel_type + ".txt"
-    feature_file = data_dir + "feats/" + data_root + "_relation.feats"
-    feature_meta_file = data_dir + "feats/" + data_root + "_relation_meta.json"
+    mention_idx_file = data_dir + "raw/" + data_root + "_mentionPairs_" + rel_type
+    if ordered_pairs:
+        mention_idx_file += "_ij"
+    mention_idx_file += ".txt"
+    feature_file_root = data_dir + "feats/" + data_root + "_relation_neural"
+    if ordered_pairs:
+        feature_file = feature_file_root + "_intra_ij.feats"
+        feature_meta_file = feature_file_root + "_intra_ij_meta.json"
+    else:
+        feature_file = feature_file_root + "_" + rel_type + ".feats"
+        feature_meta_file = feature_file_root + "_" + rel_type + "_meta.json"
     label_file = data_dir + "raw/" + data_root + "_mentionPair_labels.txt"
     if eval_data_root is not None:
         eval_sentence_file = data_dir + "raw/" + eval_data_root + "_captions.txt"
         eval_mention_idx_file = data_dir + "raw/" + eval_data_root + "_mentionPairs_" + rel_type + ".txt"
-        eval_feature_file = data_dir + "feats/" + eval_data_root + "_relation.feats"
-        eval_feature_meta_file = data_dir + "feats/" + eval_data_root + "_relation_meta.json"
         eval_label_file = data_dir + "raw/" + eval_data_root + "_mentionPair_labels.txt"
+        eval_feature_file_root = data_dir + "feats/" + eval_data_root + "_relation_neural"
+        if ordered_pairs:
+            eval_feature_file = eval_feature_file_root + "_intra_ij.feats"
+            eval_feature_meta_file = eval_feature_file_root + "_intra_ij_meta.json"
+        else:
+            eval_feature_file = eval_feature_file_root + "_" + rel_type + ".feats"
+            eval_feature_meta_file = eval_feature_file_root + "_" + rel_type + "_meta.json"
+    #endif
 
     # Load the appropriate word embeddings
     embedding_type = arg_dict['embedding_type']
@@ -394,7 +472,8 @@ def __init__():
               eval_feature_file=eval_feature_file,
               eval_feature_meta_file=eval_feature_meta_file,
               eval_label_file=eval_label_file,
-              early_stopping=arg_dict['early_stopping'], log=log)
+              early_stopping=arg_dict['early_stopping'],
+              ordered_pairs=ordered_pairs, log=log)
     elif arg_dict['predict']:
         scores_file = data_dir + "scores/" + data_root + \
                       "_relation_" + rel_type + ".scores"
@@ -411,7 +490,8 @@ def __init__():
                     sentence_file=sentence_file,
                     mention_idx_file=mention_idx_file,
                     feature_file=feature_file, feature_meta_file=feature_meta_file,
-                    label_file=label_file, scores_file=scores_file, log=log)
+                    label_file=label_file, scores_file=scores_file,
+                    ordered_pairs=ordered_pairs, log=log)
         #endwith
     #endif
 #enddef

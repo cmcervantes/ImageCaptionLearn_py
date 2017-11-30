@@ -120,20 +120,22 @@ def train(encoding_scheme, embedding_type,
     global CLASSES, N_EMBEDDING_WIDTH, N_BOX_WIDTH, task
     n_classes = len(CLASSES)
 
-    log.info("Loading training data")
+    log.tic('info', "Loading training data")
     data_dict = nn_data.load_sentences(sentence_file, embedding_type)
     data_dict.update(nn_data.load_mentions(mention_idx_file, task,
                                            feature_file, feature_meta_file,
                                            n_classes))
     data_dict.update(nn_data.load_boxes(mention_box_label_file, box_dir, box_category_file))
+    log.toc('info')
 
-    log.info("Loading eval data")
+    log.tic('info', "Loading eval data")
     eval_data_dict = nn_data.load_sentences(eval_sentence_file, embedding_type)
     eval_data_dict.update(nn_data.load_mentions(eval_mention_idx_file, task,
                                                 eval_feature_file, eval_feature_meta_file,
                                                 n_classes))
     eval_data_dict.update(nn_data.load_boxes(eval_mention_box_label_file, eval_box_dir,
                                              eval_box_category_file))
+    log.toc('info')
 
     # Load mention box pairs, ignoring all those mentions
     # that aren't in our loaded data (for punctuation reasons)
@@ -207,11 +209,12 @@ def train(encoding_scheme, embedding_type,
             #endfor
 
             # Every epoch, evaluate and save the model
-            log.info(None, "Saving model; Average Loss: %.2f; Acc: %.2f%%",
-                     sum(losses) / float(len(losses)),
-                     100.0 * sum(accuracies) / float(len(accuracies)))
+            if len(losses) > 0:
+                log.info(None, "Saving model; Average Loss: %.2f; Acc: %.2f%%",
+                         sum(losses) / float(len(losses)),
+                         100.0 * sum(accuracies) / float(len(accuracies)))
             saver.save(sess, model_file)
-            if eval_sentence_file is not None and eval_mention_idx_file is not None:
+            if (i+1) % 10 == 0 and eval_sentence_file is not None and eval_mention_idx_file is not None:
                 eval_mention_box_pairs = \
                     get_valid_mention_box_pairs(eval_data_dict)
                 pred_scores, gold_label_dict = \
@@ -342,15 +345,15 @@ def __init__():
                             "to softmax over (v)isual and (n)onvisual labels")
     parser.add_argument("--epochs", type=int, default=20,
                         help="train opt; number of times to iterate over the dataset")
-    parser.add_argument("--batch_size", type=int, default=100,
+    parser.add_argument("--batch_size", type=int, default=512,
                         help="train opt; number of random mention pairs per batch")
     parser.add_argument("--lstm_hidden_width", type=int, default=200,
                         help="train opt; number of hidden units within "
                              "the LSTM cells")
-    parser.add_argument("--start_hidden_width", type=int, default=150,
+    parser.add_argument("--start_hidden_width", type=int, default=512,
                         help="train opt; number of hidden units in the "
                              "layer after the LSTM")
-    parser.add_argument("--hidden_depth", type=int, default=1,
+    parser.add_argument("--hidden_depth", type=int, default=2,
                         help="train opt; number of hidden layers after the "
                              "lstm, where each is last_width/2 units wide, "
                              "starting with start_hidden_width")
@@ -365,9 +368,9 @@ def __init__():
                         help='train opt; global clip norm value')
     parser.add_argument("--data_norm", action='store_true',
                         help="train opt; Whether to L2-normalize the w2v word vectors")
-    parser.add_argument("--lstm_input_dropout", type=float, default=1.0,
+    parser.add_argument("--lstm_input_dropout", type=float, default=0.5,
                         help="train opt; probability to keep lstm input nodes")
-    parser.add_argument("--dropout", type=float, default=1.0,
+    parser.add_argument("--dropout", type=float, default=0.5,
                         help="train opt; probability to keep all other nodes")
     parser.add_argument("--data_dir", required=True,
                         type=lambda f: util.arg_path_exists(parser, f),
@@ -382,7 +385,7 @@ def __init__():
                         help="Evaluation dataset split")
     parser.add_argument("--encoding_scheme",
                         choices=["first_last_sentence", 'first_last_mention'],
-                        default="first_last_sentence",
+                        default="first_last_mention",
                         help="train opt; specifies how lstm outputs are transformed")
     parser.add_argument("--train", action='store_true', help='Trains a model')
     parser.add_argument("--activation", choices=['sigmoid', 'tanh', 'relu', 'leaky_relu'],
@@ -396,34 +399,12 @@ def __init__():
     parser.add_argument("--early_stopping", action='store_true',
                         help="Whether to implement early stopping based on the "
                              "evaluation performance")
-    parser.add_argument("--mention_box_label_file",
-                        type=lambda f: util.arg_path_exists(parser, f),
-                        help="Label file; overrides the default path from by combining "
-                             "data_dir, data, and split arguments")
-    parser.add_argument("--eval_mention_box_label_file",
-                        type=lambda f: util.arg_path_exists(parser, f),
-                        help="Label file for eval data; overrides default")
-    parser.add_argument("--box_category_file",
-                        type=lambda f: util.arg_path_exists(parser, f),
-                        help="File containing box category one-hots, which are"
-                             "added to bounding box representations")
-    parser.add_argument("--eval_box_category_file",
-                        type=lambda f: util.arg_path_exists(parser, f),
-                        help="Box category one-hot file for evaluation data")
     args = parser.parse_args()
     arg_dict = vars(args)
 
     if arg_dict['train'] and arg_dict['model_file'] is None:
-        model_suffix = "affinity_lstm"
-
-        # This is definitely hacky and should be removed
-        if arg_dict['box_category_file'] is not None:
-            model_suffix += "_cat"
-        if arg_dict['mention_box_label_file'] is not None and \
-           'heur' in arg_dict['mention_box_label_file']:
-            model_suffix += "_complete"
-        arg_dict['model_file'] = "/home/ccervan2/models/tacl201712/" + \
-                                 nn_data.build_model_filename(arg_dict, model_suffix)
+        arg_dict['model_file'] = "/home/ccervan2/models/tacl201801//" + \
+                                 nn_data.build_model_filename(arg_dict, "affinity_lstm")
     model_file = arg_dict['model_file']
     util.dump_args(arg_dict, log)
 
@@ -434,29 +415,25 @@ def __init__():
     if arg_dict['train']:
         eval_data_root = arg_dict['eval_data'] + "_" + arg_dict['eval_split']
     sentence_file = data_dir + "raw/" + data_root + "_captions.txt"
-    mention_idx_file = data_dir + "raw/" + data_root + "_mentions_card.txt"
-    feature_file = data_dir + "feats/" + data_root + "_card.feats"
-    feature_meta_file = data_dir + "feats/" + data_root + "_card_meta.json"
+    mention_idx_file = data_dir + "raw/" + data_root + "_mentions_affinity.txt"
+    feature_file = data_dir + "feats/" + data_root + "_affinity_neural.feats"
+    feature_meta_file = data_dir + "feats/" + data_root + "_affinity_neural_meta.json"
     box_dir = data_dir + "feats/" + arg_dict['data'] + "_boxes/" + arg_dict["split"] + "/"
-    mention_box_label_file = data_dir + "raw/" + data_root + "_mention_box_labels.txt"
+    mention_box_label_file = data_dir + "raw/" + data_root + "_affinity_labels.txt"
+    box_category_file = None
+    if "coco" in data_root:
+        box_category_file = data_dir + "raw/" + data_root + "_box_cats.txt"
     if eval_data_root is not None:
         eval_box_dir = data_dir + "feats/" + arg_dict['eval_data'] + "_boxes/" + arg_dict["eval_split"] + "/"
         eval_sentence_file = data_dir + "raw/" + eval_data_root + "_captions.txt"
-        eval_mention_idx_file = data_dir + "raw/" + eval_data_root + "_mentions_card.txt"
-        eval_feature_file = data_dir + "feats/" + eval_data_root + "_card.feats"
-        eval_feature_meta_file = data_dir + "feats/" + eval_data_root + "_card_meta.json"
-        eval_mention_box_label_file = data_dir + "raw/" + eval_data_root + "_mention_box_labels.txt"
+        eval_mention_idx_file = data_dir + "raw/" + eval_data_root + "_mentions_affinity.txt"
+        eval_feature_file = data_dir + "feats/" + eval_data_root + "_affinity_neural.feats"
+        eval_feature_meta_file = data_dir + "feats/" + eval_data_root + "_affinity_neural_meta.json"
+        eval_mention_box_label_file = data_dir + "raw/" + eval_data_root + "_affinity_labels.txt"
+        eval_box_category_file = None
+        if "coco" in eval_data_root:
+            eval_box_category_file = data_dir + "raw/" + eval_data_root + "_box_cats.txt"
     #endif
-
-    # Override the label files, if specified
-    if arg_dict['mention_box_label_file'] is not None:
-        mention_box_label_file = arg_dict['mention_box_label_file']
-    if arg_dict['eval_mention_box_label_file'] is not None:
-        eval_mention_box_label_file = arg_dict['eval_mention_box_label_file']
-
-    # Get the category file, if specified
-    box_category_file = arg_dict['box_category_file']
-    eval_box_category_file = arg_dict['eval_box_category_file']
 
     # Load the appropriate word embeddings
     embedding_type = arg_dict['embedding_type']

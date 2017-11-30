@@ -495,7 +495,7 @@ def load_batch(ids, data_dict, task, n_classes):
                 loaded_box_ids = set(box_ids)
             #endif
             batch_tensors['box_embeddings'][i] = box_embedding_dict[b_id]
-    #endfor
+    #endfor]
 
     return batch_tensors
 #enddef

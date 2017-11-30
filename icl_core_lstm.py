@@ -153,7 +153,7 @@ def train(task, encoding_scheme, embedding_type,
                      sum(losses) / float(len(losses)),
                      100.0 * sum(accuracies) / float(len(accuracies)))
             saver.save(sess, model_file)
-            if eval_sentence_file is not None and eval_mention_idx_file is not None:
+            if (i+1) % 10 == 0 and eval_sentence_file is not None and eval_mention_idx_file is not None:
                 eval_mentions = eval_data_dict['mention_indices'].keys()
                 pred_scores, gold_label_dict = \
                     nn_util.get_pred_scores_mcc(task, encoding_scheme,
@@ -265,16 +265,16 @@ def __init__():
     parser.add_argument("--epochs", type=int, default=20,
                         help="train opt; number of times to "
                              "iterate over the dataset")
-    parser.add_argument("--batch_size", type=int, default=100,
+    parser.add_argument("--batch_size", type=int, default=512,
                         help="train opt; number of random mention "
                              "pairs per batch")
     parser.add_argument("--lstm_hidden_width", type=int, default=200,
                         help="train opt; number of hidden units "
                              "within the LSTM cells")
-    parser.add_argument("--start_hidden_width", type=int, default=150,
+    parser.add_argument("--start_hidden_width", type=int, default=512,
                         help="train opt; number of hidden units "
                              "in the layer after the LSTM")
-    parser.add_argument("--hidden_depth", type=int, default=1,
+    parser.add_argument("--hidden_depth", type=int, default=2,
                         help="train opt; number of hidden layers "
                              "after the lstm, where each is "
                              "last_width/2 units wide, starting "
@@ -290,9 +290,9 @@ def __init__():
                         help='train opt; global clip norm value')
     parser.add_argument("--data_norm", action='store_true',
                         help="train opt; Whether to L2-normalize the w2v word vectors")
-    parser.add_argument("--lstm_input_dropout", type=float, default=1.0,
+    parser.add_argument("--lstm_input_dropout", type=float, default=0.5,
                         help="train opt; probability to keep lstm input nodes")
-    parser.add_argument("--dropout", type=float, default=1.0,
+    parser.add_argument("--dropout", type=float, default=0.5,
                         help="train opt; probability to keep all other nodes")
     parser.add_argument("--data_dir", required=True,
                         type=lambda f: util.arg_path_exists(parser, f),
@@ -324,7 +324,7 @@ def __init__():
 
     task = arg_dict['task']
     if arg_dict['train']:
-        arg_dict['model_file'] = "/home/ccervan2/models/tacl201712/" + \
+        arg_dict['model_file'] = "/home/ccervan2/models/tacl201801/" + \
                                  nn_data.build_model_filename(arg_dict, task + "_lstm")
     model_file = arg_dict['model_file']
     util.dump_args(arg_dict, log)
@@ -335,13 +335,13 @@ def __init__():
     eval_data_root = arg_dict['eval_data_root']
     sentence_file = data_dir + "raw/" + data_root + "_captions.txt"
     mention_idx_file = data_dir + "raw/" + data_root + "_mentions_" + task + ".txt"
-    feature_file = data_dir + "feats/" + data_root + "_" + task + ".feats"
-    feature_meta_file = data_dir + "feats/" + data_root + "_" + task + "_meta.json"
+    feature_file = data_dir + "feats/" + data_root + "_" + task + "_neural.feats"
+    feature_meta_file = data_dir + "feats/" + data_root + "_" + task + "_neural_meta.json"
     if eval_data_root is not None:
         eval_sentence_file = data_dir + "raw/" + eval_data_root + "_captions.txt"
         eval_mention_idx_file = data_dir + "raw/" + eval_data_root + "_mentions_" + task + ".txt"
-        eval_feature_file = data_dir + "feats/" + eval_data_root + "_" + task + ".feats"
-        eval_feature_meta_file = data_dir + "feats/" + eval_data_root + "_" + task + "_meta.json"
+        eval_feature_file = data_dir + "feats/" + eval_data_root + "_" + task + "_neural.feats"
+        eval_feature_meta_file = data_dir + "feats/" + eval_data_root + "_" + task + "_neural_meta.json"
     #endif
 
     # Load the appropriate word embeddings
