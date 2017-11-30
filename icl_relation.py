@@ -2,12 +2,14 @@ import cPickle
 import json
 from argparse import ArgumentParser
 from os.path import abspath, expanduser
-
+import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import normalize
+
 from utils.Logger import Logger
 from utils import core as util
 from utils import data as data_util
+from utils import string as string_util
 from utils.ScoreDict import ScoreDict
 
 
@@ -51,35 +53,26 @@ def train(solver, max_iter, balance, norm, warm_start,
 #enddef
 
 
-def save_scores(ignored_feats=set()):
-    """
-    Saves predicted scores to file
-    :param ignored_feats:
-    :return:
-    """
-    global log, eval_file, model_file, scores_file, meta_dict
+def induce_ji_predictions(pred_scores):
+    for ij_pair in pred_scores.keys():
+        # Split the ij pair label into its constituent elements so we
+        # can construct the ji pair; Recall that a mention pair ID is
+        #   doc:<ID>;caption_1:<idx>;mention_1:<idx>;caption_2:<idx>;mention_2:<idx>
+        ij_pair_dict = string_util.kv_str_to_dict(ij_pair)
+        ji_pair = "doc:" + ij_pair_dict['doc'] + \
+                  ";caption_1:" + ij_pair_dict['caption_2'] + \
+                  ";mention_1:" + ij_pair_dict['mention_2'] + \
+                  ";caption_2:" + ij_pair_dict['caption_1'] + \
+                  ";mention_2:" + ij_pair_dict['mention_1']
 
-    log.info("Loading model from file")
-    learner = cPickle.load(open(model_file, 'r'))
-
-    log.info("Loading eval data")
-    x_eval, y_eval, ids_eval = \
-        data_util.load_very_sparse_feats(eval_file, meta_dict,
-                                         ignored_feats)
-
-    log.info("Predicting scores")
-    y_pred_probs = learner.predict_log_proba(x_eval)
-
-    log.info("Writing probabilities to " + scores_file)
-    with open(scores_file, 'w') as f:
-        for i in range(len(ids_eval)):
-            line = list()
-            line.append(ids_eval[i])
-            for j in range(len(y_pred_probs[i])):
-                line.append(str(y_pred_probs[i][j]))
-            f.write(','.join(line) + '\n')
-        f.close()
-    #endwith
+        # The scores for ji are the same predictions for coref and null,
+        # but flipped for sub/supset
+        pred_scores[ji_pair] = np.zeros(4)
+        pred_scores[ji_pair][:] = pred_scores[ij_pair]
+        pred_scores[ji_pair][2] = pred_scores[ij_pair][3]
+        pred_scores[ji_pair][3] = pred_scores[ij_pair][2]
+    #endfor
+    return pred_scores
 #enddef
 
 
@@ -90,7 +83,7 @@ def evaluate(norm, ignored_feats=set()):
     :param ignored_feats:
     :return:
     """
-    global log, eval_file, model_file, nonvis_file, scores_file, meta_dict
+    global log, eval_file, model_file, scores_file, meta_dict
 
     log.info("Loading model from file")
     logistic = cPickle.load(open(model_file, 'r'))
@@ -103,56 +96,23 @@ def evaluate(norm, ignored_feats=set()):
         normalize(x_eval, norm=norm, copy=False)
     #endif
 
-    log.info("Loading gold nonvis data from file")
-    ids_nonvis_gold = set()
-    if nonvis_file is not None:
-        ids_nonvis_gold = load_nonvis_ids()
-
     log.info("Evaluating")
     y_pred_probs = logistic.predict_log_proba(x_eval)
+
+    # Though we don't evaluate against them here, we want
+    # to store scores for both ij and ji pairs
+    pred_scores = dict()
+    for i in range(len(ids_eval)):
+        pred_scores[ids_eval[i]] = y_pred_probs[i]
+    pred_scores = induce_ji_predictions(pred_scores)
+
+    # We evaluate here only on ij pairs, but since this script
+    # is not our final evaluation (and because the score should be
+    # identical anyway) that's fine; this is functionally an estimate
+    # of the true score
     scores = ScoreDict()
-    mistake_dict = dict()
     for i in range(len(y_eval)):
-        # pairwise ids are in the form
-        # doc:<img_id>;caption_1:<cap_idx>;mention_1:<mention_idx>;caption_2:<cap_idx>;mention_2:<mention_idx>
-        # and nonvis ids are in the form
-        # <img_id>#<cap_idx>;mention:<mention_idx>
-        # So we need to do some processing
-        id = ids_eval[i]
-        id_parts = id.split(";")
-        img_id = id_parts[0].replace("doc:", "")
-        id_1 = img_id + "#" + id_parts[1].replace("caption_1:", "") + ";" + id_parts[2].replace("_1", "")
-        id_2 = img_id + "#" + id_parts[3].replace("caption_2:", "") + ";" + id_parts[4].replace("_2", "")
-
-        #now ignore any pair in which a nonvisual appears (as these do not have identity relations)
-        if id_1 not in ids_nonvis_gold and id_2 not in ids_nonvis_gold:
-            y_pred = 0
-            max_prob = -float('inf')
-            for j in range(len(y_pred_probs[i])):
-                if y_pred_probs[i][j] > max_prob:
-                    max_prob = y_pred_probs[i][j]
-                    y_pred = j
-
-            scores.increment(y_eval[i], y_pred)
-            if y_eval[i] != y_pred:
-                label_pair = (y_eval[i], y_pred)
-                if label_pair not in mistake_dict.keys():
-                    mistake_dict[label_pair] = list()
-                mistake_dict[label_pair].append((id_1, id_2))
-            #endif
-        #endif
-    #endfor
-
-    log.info("Writing mistakes in pairwise_mistakes.csv")
-    with open('pairwise_mistakes.csv', 'w') as f:
-        f.write("Gold,Pred,Mention_1,Mention_2")
-        for label_pair in mistake_dict.keys():
-            for id_pair in mistake_dict[label_pair]:
-                f.write("%d,%d,%s,%s\n" % (label_pair[0], label_pair[1], id_pair[0], id_pair[1]))
-            #endfor
-        #endfor
-        f.close()
-    #endwith
+        scores.increment(y_eval[i], np.argmax(y_pred_probs[i]))
 
     log.info("---Confusion matrix---")
     scores.print_confusion()
@@ -160,114 +120,24 @@ def evaluate(norm, ignored_feats=set()):
     log.info("---Scores---")
     for label in scores.keys:
         print str(label) + "\t" + scores.get_score(label).to_string() + " - %d (%.2f%%)" % \
-                                                                       (scores.get_gold_count(label), scores.get_gold_percent(label))
-    #endfor
+              (scores.get_gold_count(label), scores.get_gold_percent(label))
+    print "Acc: " + str(scores.get_accuracy()) + "%"
 
     if scores_file is not None:
-        log.info("Writing probabilities to file")
-        f = open(scores_file, 'w')
-        for i in range(len(ids_eval)):
-            line = list()
-            line.append(ids_eval[i])
-            for j in range(len(y_pred_probs[i])):
-                line.append(str(y_pred_probs[i][j]))
-            f.write(','.join(line) + '\n')
-        #endfor
-    #endif
-
-    print "Acc: " + str(scores.get_accuracy()) + "%"
-#enddef
-
-
-def load_nonvis_ids():
-    """
-    Loads nonvisual IDs
-    :return:
-    """
-    global nonvis_file
-    ids_nonvis_gold = set()
-    with open(nonvis_file, 'r') as f:
-        f.seek(0)
-        for line in f:
-            commentSplit = line.split(" # ")
-            vectorSplit = commentSplit[0].strip().split(" ")
-            if int(float(vectorSplit[0])) == 1:
-                ids_nonvis_gold.add(commentSplit[1].strip())
-        #endfor
-        f.close()
-    #endwith
-    return ids_nonvis_gold
-#enddef
-
-
-def tune():
-    """
-    Tunes the parameters over the model
-    :return:
-    """
-    global train_file, eval_file, meta_dict
-
-    log.tic('info', 'Loading data')
-    x_train, y_train, ids_train = \
-        data_util.load_very_sparse_feats(train_file, meta_dict)
-    x_eval, y_eval, ids_eval = \
-        data_util.load_very_sparse_feats(eval_file, meta_dict)
-    ids_nonvis_gold = load_nonvis_ids()
-    log.toc('info')
-
-    for slvr in solvers:
-        for mcc_mode in multiclass_modes:
-            for balance in [True, False]:
-                for warm in [True, False]:
-                    if slvr == 'sag' and mcc_mode=='multinomial':
-                        continue # sag is only usable with ovr
-                    log.info(None, "----slvr:%s; mode:%s; balance:%s; warm:%s----",
-                             slvr, mcc_mode, str(balance), str(warm))
-
-                    log.tic('info', "Training")
-                    class_weight = None
-                    if balance:
-                        class_weight = 'balanced'
-                    #endif
-                    logistic = LogisticRegression(class_weight=class_weight, solver=slvr,
-                                                  max_iter=1000, multi_class=mcc_mode, n_jobs=-1, verbose=1,
-                                                  warm_start=warm)
-                    logistic.fit(x_train, y_train)
-                    log.toc('info')
-
-                    log.info("Evaluating")
-                    y_pred_eval = logistic.predict(x_eval)
-                    scores = ScoreDict()
-                    for i in range(len(y_eval)):
-                        # pairwise ids are in the form
-                        # doc:<img_id>;caption_1:<cap_idx>;mention_1:<mention_idx>;caption_2:<cap_idx>;mention_2:<mention_idx>
-                        # and nonvis ids are in the form
-                        # <img_id>#<cap_idx>;mention:<mention_idx>
-                        # So we need to do some processing
-                        id = ids_eval[i]
-                        id_parts = id.split(";")
-                        img_id = id_parts[0].replace("doc:", "")
-                        id_1 = img_id + "#" + id_parts[1].replace("caption_1:", "") + ";" + id_parts[2].replace("_1", "")
-                        id_2 = img_id + "#" + id_parts[3].replace("caption_2:", "") + ";" + id_parts[4].replace("_2", "")
-
-                        #now ignore any pair in which a nonvisual appears (as these do not have identity relations)
-                        if id_1 not in ids_nonvis_gold and id_2 not in ids_nonvis_gold:
-                            scores.increment(y_eval[i], y_pred_eval[i])
-                    #endfor
-
-                    log.info("---Confusion matrix---")
-                    scores.print_confusion()
-
-                    log.info("---Scores---")
-                    for label in scores.keys:
-                        print str(label) + "\t" + scores.get_score(label).to_string() + " - %d (%.2f%%)" % \
-                                                                                       (scores.get_gold_count(label), scores.get_gold_percent(label))
-                    #endfor
-                #endfor
+        log.info("Writing probabilities to " + scores_file)
+        with open(scores_file, 'w') as f:
+            for id in pred_scores.keys():
+                line = list()
+                line.append(id)
+                for j in range(len(pred_scores[id])):
+                    line.append(str(pred_scores[id][j]))
+                f.write(','.join(line) + '\n')
             #endfor
-        #endfor
-    #endfor
+            f.close()
+        #endwith
+    #endif
 #enddef
+
 
 # At one time I had more arguments, but in the end it's much
 # easier not to specify all this on the command line
@@ -286,33 +156,40 @@ parser.add_argument("--balance", action='store_true',
                     help="train_opt; Whether to use class weights inversely proportional to the data distro")
 parser.add_argument("--mcc_mode", choices=multiclass_modes, default=multiclass_modes[0],
                     help="train opt; multiclass mode")
-parser.add_argument("--train_file", type=str, help="train feats file")
-parser.add_argument("--eval_file", type=str, help="eval feats file")
-parser.add_argument("--meta_file", type=str, help="meta feature file (typically associated with train file)")
-parser.add_argument("--model_file", type=str, help="saves model to file")
 parser.add_argument("--nonvis_file", type=str, help="Retrieves nonvis labels from file; excludes from eval")
 parser.add_argument("--ablation_file", type=str, help="Performs ablation, using the groupings specified "
                                                       "in the given ablation config file ")
+parser.add_argument("--data_dir", required=True,
+                    type=lambda f: util.arg_path_exists(parser, f),
+                    help="Directory containing feats/, and scores/ directories")
+parser.add_argument("--data_root", type=str, required=True,
+                    help="Data file root (eg. flickr30k_train)")
+parser.add_argument("--eval_data_root", type=str,
+                    help="Data file root for eval data (eg. flickr30k_dev)")
+parser.add_argument("--train", action='store_true', help='Trains a model')
+parser.add_argument("--predict", action='store_true',
+                    help='Predicts using pre-trained model')
+parser.add_argument("--rel_type", choices=['intra', 'intra_ij', 'cross'],
+                    required=True,
+                    help="Whether we're dealing with intra-caption or "
+                         "cross-caption relations")
+parser.add_argument("--model_file", type=str, required=True,
+                    help="Model file to save/load")
 args = parser.parse_args()
 arg_dict = vars(args)
 util.dump_args(arg_dict, log)
 
-
-
-# Parse our file paths
-train_file = arg_dict['train_file']
-if train_file is not None:
-    train_file = abspath(expanduser(train_file))
-eval_file = arg_dict['eval_file']
-scores_file = None
-if eval_file is not None:
-    eval_file = abspath(expanduser(eval_file))
-    scores_file = eval_file.replace(".feats", ".scores")
-meta_file = arg_dict['meta_file']
-meta_dict = None
-if meta_file is not None:
-    meta_file = abspath(expanduser(meta_file))
-    meta_dict = json.load(open(meta_file, 'r'))
+# Construct data files from the root directory and filename
+data_dir = arg_dict['data_dir'] + "/"
+data_root = arg_dict['data_root']
+eval_data_root = arg_dict['eval_data_root']
+rel_type = arg_dict['rel_type']
+file_suffix = "_relation_classifier_" + rel_type
+train_file = data_dir + "feats/" + data_root + file_suffix + ".feats"
+eval_file = data_dir + "feats/" + eval_data_root + file_suffix + ".feats"
+scores_file = data_dir + "scores/" + eval_data_root + file_suffix + ".scores"
+meta_file = data_dir + "feats/" + data_root + file_suffix + "_meta.json"
+meta_dict = json.load(open(meta_file, 'r'))
 model_file = arg_dict['model_file']
 if model_file is not None:
     model_file = abspath(expanduser(model_file))
@@ -321,13 +198,6 @@ ablation_groups = None
 if ablation_file is not None:
     ablation_file = abspath(expanduser(ablation_file))
     ablation_groups = data_util.load_ablation_file(ablation_file)
-nonvis_file = arg_dict['nonvis_file']
-meta_nonvis_file = None
-if nonvis_file is not None:
-    nonvis_file = abspath(expanduser(nonvis_file))
-    meta_nonvis_file = nonvis_file.replace(".feats", "_meta.json")
-#endif
-
 
 # Parse the other args
 max_iter = arg_dict['max_iter']
@@ -337,44 +207,7 @@ solver_type = arg_dict['solver']
 mcc_mode = arg_dict['mcc_mode']
 normalize_data = arg_dict['norm']
 
-# Ensure we don't have an invalid collection of options
-if train_file is not None and (meta_file is None or model_file is None):
-    log.critical("Specified train_file without meta or model files; exiting")
-    parser.print_usage()
-    quit()
-if eval_file is not None and model_file is None:
-    log.critical("Specified eval_file without model_file; exiting")
-    parser.print_usage()
-    quit()
-if ablation_file is not None and (train_file is None or eval_file is None or meta_file is None):
-    log.critical("Specified ablation_file without train, eval, or meta file; exiting")
-    parser.print_usage()
-    quit()
-if train_file is None and eval_file is None:
-    log.critical("Did not specify train or eval file; exiting")
-    parser.print_usage()
-    quit()
-
-
-# If an ablation file was given priority goes to that operation
-if ablation_file is not None:
-    log.info("Running ablation testing")
-
-    log.info("---------- Baseline ----------")
+if arg_dict['train']:
     train(solver_type, max_iter, balance, normalize_data, warm_start, mcc_mode, set())
+if arg_dict['predict']:
     evaluate(normalize_data, set())
-
-    for ablation_feats in ablation_groups:
-        ablation_feats_str = "|".join(ablation_feats)
-        log.info(None, "---------- Removing %s ----------", ablation_feats_str)
-        train(solver_type, max_iter, balance, normalize_data, warm_start,
-              mcc_mode, ablation_feats)
-        evaluate(normalize_data, ablation_feats)
-    #endfor
-else:
-    if train_file is not None:
-        train(solver_type, max_iter, balance, normalize_data, warm_start, mcc_mode, set())
-    if eval_file is not None:
-        evaluate(normalize_data, set())
-        save_scores(set())
-#endif

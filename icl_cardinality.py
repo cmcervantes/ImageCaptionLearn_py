@@ -120,31 +120,33 @@ parser.add_argument("--max_iter", type=int, default=100, help="train opt; Max SV
 parser.add_argument("--balance", action='store_true',
                     help="train_opt; Whether to use class weights inversely proportional to the data distro")
 parser.add_argument("--warm", action='store_true', help='train_opt; Whether to use warm start')
-parser.add_argument("--train_file", type=str, help="Train feature file")
-parser.add_argument("--eval_file", type=str, help="Eval feature file")
-parser.add_argument("--model_file", type=str, help="File to save learned model")
-parser.add_argument("--meta_file", type=str, help="Meta feature file (typically associated with train file")
 parser.add_argument("--ablation_file", type=str, help="Performs ablation, using the groupings specified "
                                                       "in the given ablation config file ")
+parser.add_argument("--data_dir", required=True,
+                    type=lambda f: util.arg_path_exists(parser, f),
+                    help="Directory containing feats/, and scores/ directories")
+parser.add_argument("--data_root", type=str, required=True,
+                    help="Data file root (eg. flickr30k_train)")
+parser.add_argument("--eval_data_root", type=str,
+                    help="Data file root for eval data (eg. flickr30k_dev)")
+parser.add_argument("--train", action='store_true', help='Trains a model')
+parser.add_argument("--predict", action='store_true',
+                    help='Predicts using pre-trained model')
+parser.add_argument("--model_file", type=str, required=True,
+                    help="Model file to save/load")
 args = parser.parse_args()
 arg_dict = vars(args)
 util.dump_args(arg_dict, log)
 
-
-# Parse our file paths
-train_file = arg_dict['train_file']
-if train_file is not None:
-    train_file = abspath(expanduser(train_file))
-eval_file = arg_dict['eval_file']
-scores_file = None
-if eval_file is not None:
-    eval_file = abspath(expanduser(eval_file))
-    scores_file = eval_file.replace(".feats", ".scores")
-meta_file = arg_dict['meta_file']
-meta_dict = None
-if meta_file is not None:
-    meta_file = abspath(expanduser(meta_file))
-    meta_dict = json.load(open(meta_file, 'r'))
+# Construct data files from the root directory and filename
+data_dir = arg_dict['data_dir'] + "/"
+data_root = arg_dict['data_root']
+eval_data_root = arg_dict['eval_data_root']
+train_file = data_dir + "feats/" + data_root + "_card_classifier.feats"
+eval_file = data_dir + "feats/" + eval_data_root + "_card_classifier.feats"
+scores_file = data_dir + "scores/" + eval_data_root + "_card_classifier.scores"
+meta_file = data_dir + "feats/" + data_root + "_card_classifier_meta.json"
+meta_dict = json.load(open(meta_file, 'r'))
 model_file = arg_dict['model_file']
 if model_file is not None:
     model_file = abspath(expanduser(model_file))
@@ -159,42 +161,7 @@ max_iter = arg_dict['max_iter']
 balance = arg_dict['balance']
 warm_start = arg_dict['warm']
 
-# Ensure we don't have an invalid collection of options
-if train_file is not None and (meta_file is None or model_file is None):
-    log.critical("Specified train_file without meta or model files; exiting")
-    parser.print_usage()
-    quit()
-if eval_file is not None and model_file is None:
-    log.critical("Specified eval_file without model_file; exiting")
-    parser.print_usage()
-    quit()
-if ablation_file is not None and (train_file is None or eval_file is None or meta_file is None):
-    log.critical("Specified ablation_file without train, eval, or meta file; exiting")
-    parser.print_usage()
-    quit()
-if train_file is None and eval_file is None:
-    log.critical("Did not specify train or eval file; exiting")
-    parser.print_usage()
-    quit()
-
-
-# If an ablation file was given priority goes to that operation
-if ablation_file is not None:
-    log.info("Running ablation testing")
-
-    log.info("---------- Baseline ----------")
+if arg_dict['train']:
     train(max_iter, balance, warm_start, set())
+if arg_dict['predict']:
     evaluate(set())
-
-    for ablation_feats in ablation_groups:
-        ablation_feats_str = "|".join(ablation_feats)
-        log.info(None, "---------- Removing %s ----------", ablation_feats_str)
-        train(max_iter, balance, warm_start, ablation_feats)
-        evaluate(ablation_feats)
-    #endfor
-else:
-    if train_file is not None:
-        train(max_iter, balance, warm_start, set())
-    if eval_file is not None:
-        evaluate(set())
-#endif
