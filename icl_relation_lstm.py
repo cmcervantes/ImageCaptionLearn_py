@@ -280,15 +280,12 @@ def predict(rel_type, encoding_scheme, embedding_type,
     # Get the predicted scores, given our arguments
     log.info("Predictiong scores")
     mention_pairs = data_dict['mention_indices'].keys()
-    if ordered_pairs:
-        mention_pairs = get_ij_pairs(mention_pairs)
     pred_scores, _ = nn_util.get_pred_scores_mcc(task, encoding_scheme,
                                                  tf_session, batch_size,
                                                  mention_pairs, data_dict,
                                                  n_classes, log)
     if ordered_pairs:
         pred_scores = induce_ji_predictions(pred_scores)
-        mention_pairs = data_dict['mention_indices'].keys()
 
     log.info("Loading data from " + label_file)
     gold_label_dict = nn_data.load_relation_labels(label_file)
@@ -296,15 +293,15 @@ def predict(rel_type, encoding_scheme, embedding_type,
     # If we do an argmax on the scores, we get the predicted labels
     log.info("Getting labels from scores")
     pred_labels = list()
-    for pair in mention_pairs:
+    for pair in pred_scores.keys():
         pred_labels.append(np.argmax(pred_scores[pair]))
 
     # Evaluate the predictions
     log.info("Evaluating against the gold")
-    nn_eval.evaluate_relations(mention_pairs, pred_labels, gold_label_dict, log)
+    nn_eval.evaluate_relations(pred_scores.keys(), pred_labels, gold_label_dict, log)
 
     # If a scores file was specified, write the scores
-    log.info("Writing scores file")
+    log.info("Writing scores file " + scores_file)
     if scores_file is not None:
         with open(scores_file, 'w') as f:
             for pair_id in pred_scores.keys():
@@ -476,7 +473,7 @@ def __init__():
               ordered_pairs=ordered_pairs, log=log)
     elif arg_dict['predict']:
         scores_file = data_dir + "scores/" + data_root + \
-                      "_relation_" + rel_type + ".scores"
+                      "_relation_" + rel_type + "_lstm.scores"
 
         # Restore our variables
         tf.reset_default_graph()

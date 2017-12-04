@@ -421,8 +421,8 @@ def __init__():
     box_dir = data_dir + "feats/" + arg_dict['data'] + "_boxes/" + arg_dict["split"] + "/"
     mention_box_label_file = data_dir + "raw/" + data_root + "_affinity_labels.txt"
     box_category_file = None
-    if "coco" in data_root:
-        box_category_file = data_dir + "raw/" + data_root + "_box_cats.txt"
+    #if "coco" in data_root:
+    #    box_category_file = data_dir + "raw/" + data_root + "_box_cats.txt"
     if eval_data_root is not None:
         eval_box_dir = data_dir + "feats/" + arg_dict['eval_data'] + "_boxes/" + arg_dict["eval_split"] + "/"
         eval_sentence_file = data_dir + "raw/" + eval_data_root + "_captions.txt"
@@ -431,8 +431,8 @@ def __init__():
         eval_feature_meta_file = data_dir + "feats/" + eval_data_root + "_affinity_neural_meta.json"
         eval_mention_box_label_file = data_dir + "raw/" + eval_data_root + "_affinity_labels.txt"
         eval_box_category_file = None
-        if "coco" in eval_data_root:
-            eval_box_category_file = data_dir + "raw/" + eval_data_root + "_box_cats.txt"
+    #    if "coco" in eval_data_root:
+    #        eval_box_category_file = data_dir + "raw/" + eval_data_root + "_box_cats.txt"
     #endif
 
     # Load the appropriate word embeddings

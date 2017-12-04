@@ -421,12 +421,17 @@ def setup_batch_inputs(batch_size, lstm_outputs, task, encoding_scheme,
         if task == "affinity":
             box_embeddings = tf.placeholder(tf.float32, [batch_size, box_embedding_width])
             tf.add_to_collection(scope_name + "box_embeddings", box_embeddings)
+
+            # with tf.variable_scope('box_hidden'):
+            #     box_hidden = setup_ffw(box_embeddings, [box_embedding_width/2], activation='relu', dropout=0.5)
+            # tensor_list.append(box_hidden)
+
             tensor_list.append(box_embeddings)
             if n_box_feats is not None:
                 b_feats = tf.placeholder(tf.float32, [batch_size, n_box_feats])
                 tf.add_to_collection(scope_name + "b_feats", b_feats)
                 tensor_list.append(b_feats)
-        #endif
+        # #endif
     #endif
 
     # Everything should be loaded into the tensor list, so we can concatenate
