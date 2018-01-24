@@ -1,0 +1,40 @@
+=================================================
+Table of Contents
+=================================================
+1) Introduction
+2) Modules
+
+=================================================
+1) Introduction
+=================================================
+ImageCaptionLearn_py is the learning component of the
+Entity-Based Scene Understanding project. It contains the
+functionality necessary for training models for predicting
+nonvisual mentions, relations between mentions, mention cardinality,
+and the affinity between mentions and boxes.
+
+=================================================
+2) Modules
+=================================================
+Most of the ImageCaptionLearn_py files are in the top level (or rather,
+they do not belong to a specific module), as they are intended to be
+run, rather than serve as components of some other file. In general, these files
+are either linear classifiers using Scikit-Learn, (e.g. icl_relation, icl_nonvisual)
+or are neural classifiers using Tensorflow (e.g. icl_affinity_lstm, icl_relation_lstm).
+Of special note is icl_core_lstm, which handles nonvisual and cardinality prediction
+(which use identical neural architectures), and icl_multitask_lstm, which was an
+attempt to train all component classifiers jointly (this took far too long
+to train with little to no benefit in performance).
+
+a) nn_utils
+    Hosting a number of neural network utilities, the files in
+    this module contain functions to do things from producing
+    weights placeholders in tensorflow to setting up the common
+    bidirectional LSTM architecture used in the neural classifiers to
+    evaluating multiclass classification performance
+b) utils
+    The utils module contains various useful functions for manipulating
+    strings, scoring predictions, interfacing with Word2Vec embeddings, and
+    similar.
+
+    

@@ -332,7 +332,7 @@ def setup_bidirectional_lstm(n_hidden, data_norm=False,
 #enddef
 
 
-def __add_lstm_output_placeholder(var_name, batch_size, lstm_outputs, scope_name):
+def add_lstm_output_placeholder(var_name, batch_size, lstm_outputs, scope_name):
     """
     Adds an lstm output placeholder, which gathers lstm outputs by the various
     indices that are set with the placeholder
@@ -374,44 +374,44 @@ def setup_batch_inputs(batch_size, lstm_outputs, task, encoding_scheme,
     # Regardless of task, we use the backward direction from
     # the first of the i mention words, and the forward direction
     # from the last i mention words
-    tensor_list.append(__add_lstm_output_placeholder("first_i_bw", batch_size,
-                                                     lstm_outputs, scope_name))
-    tensor_list.append(__add_lstm_output_placeholder("last_i_fw", batch_size,
-                                                     lstm_outputs, scope_name))
+    tensor_list.append(add_lstm_output_placeholder("first_i_bw", batch_size,
+                                                   lstm_outputs, scope_name))
+    tensor_list.append(add_lstm_output_placeholder("last_i_fw", batch_size,
+                                                   lstm_outputs, scope_name))
 
     # Add encoding-specific placeholders
     if encoding_scheme == "first_last_sentence":
-        tensor_list.append(__add_lstm_output_placeholder("sent_last_i_fw", batch_size,
-                                                         lstm_outputs, scope_name))
-        tensor_list.append(__add_lstm_output_placeholder("sent_first_i_bw", batch_size,
-                                                         lstm_outputs, scope_name))
+        tensor_list.append(add_lstm_output_placeholder("sent_last_i_fw", batch_size,
+                                                       lstm_outputs, scope_name))
+        tensor_list.append(add_lstm_output_placeholder("sent_first_i_bw", batch_size,
+                                                       lstm_outputs, scope_name))
     elif encoding_scheme == "first_last_mention":
-        tensor_list.append(__add_lstm_output_placeholder("first_i_fw", batch_size,
-                                                         lstm_outputs, scope_name))
-        tensor_list.append(__add_lstm_output_placeholder("last_i_bw", batch_size,
-                                                         lstm_outputs, scope_name))
+        tensor_list.append(add_lstm_output_placeholder("first_i_fw", batch_size,
+                                                       lstm_outputs, scope_name))
+        tensor_list.append(add_lstm_output_placeholder("last_i_bw", batch_size,
+                                                       lstm_outputs, scope_name))
     #endif
 
     # Switch on the task / encoding scheme for the rest of the variables
     if "rel" in task:
-        tensor_list.append(__add_lstm_output_placeholder("first_j_bw", batch_size,
-                                                         lstm_outputs, scope_name))
-        tensor_list.append(__add_lstm_output_placeholder("last_j_fw", batch_size,
-                                                         lstm_outputs, scope_name))
+        tensor_list.append(add_lstm_output_placeholder("first_j_bw", batch_size,
+                                                       lstm_outputs, scope_name))
+        tensor_list.append(add_lstm_output_placeholder("last_j_fw", batch_size,
+                                                       lstm_outputs, scope_name))
         ij_feats = tf.placeholder(tf.float32, [batch_size, n_mention_feats])
         tf.add_to_collection(scope_name + "ij_feats", ij_feats)
         tensor_list.append(ij_feats)
 
         if encoding_scheme == "first_last_sentence" and task == "rel_cross":
-            tensor_list.append(__add_lstm_output_placeholder("sent_last_j_fw", batch_size,
-                                                             lstm_outputs, scope_name))
-            tensor_list.append(__add_lstm_output_placeholder("sent_first_j_bw", batch_size,
-                                                             lstm_outputs, scope_name))
+            tensor_list.append(add_lstm_output_placeholder("sent_last_j_fw", batch_size,
+                                                           lstm_outputs, scope_name))
+            tensor_list.append(add_lstm_output_placeholder("sent_first_j_bw", batch_size,
+                                                           lstm_outputs, scope_name))
         elif encoding_scheme == "first_last_mention":
-            tensor_list.append(__add_lstm_output_placeholder("first_j_fw", batch_size,
-                                                             lstm_outputs, scope_name))
-            tensor_list.append(__add_lstm_output_placeholder("last_j_bw", batch_size,
-                                                             lstm_outputs, scope_name))
+            tensor_list.append(add_lstm_output_placeholder("first_j_fw", batch_size,
+                                                           lstm_outputs, scope_name))
+            tensor_list.append(add_lstm_output_placeholder("last_j_bw", batch_size,
+                                                           lstm_outputs, scope_name))
         #endif
     elif task == "nonvis" or task == "card" or task == "affinity":
         m_feats = tf.placeholder(tf.float32, [batch_size, n_mention_feats])

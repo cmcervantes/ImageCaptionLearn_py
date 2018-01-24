@@ -299,3 +299,37 @@ def load_ablation_file(filename):
     return feature_groups
 #enddef
 
+
+def read_line_list(file_path):
+    """
+    Helper function, reading the given file
+    as a list of lines
+
+    :param file_path:
+    :return:
+    """
+    lines = list()
+    with open(file_path, 'r') as f:
+        for line in f.readlines():
+            lines.append(line.strip())
+    #endwith
+    return lines
+#enddef
+
+
+def read_table(file_path, delimiter=","):
+    """
+    Helper function, reading the given (ostensibly csv file)
+    into a list of lists; each line is assumed to be a row
+    with cells separated by the given delimiter
+
+    :param file_path:
+    :param delimiter:
+    :return:
+    """
+    line_list = read_line_list(file_path)
+    table = list()
+    for line in line_list:
+        table.append(line.split(delimiter))
+    return table
+#enddef

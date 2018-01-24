@@ -2,6 +2,7 @@ import json
 import numpy as np
 from os import listdir
 from os.path import isfile
+import random as rand
 from utils import string as str_util
 from utils import data as data_util
 from utils.Word2Vec import Word2Vec
@@ -188,6 +189,32 @@ def load_mentions(mention_idx_file, task, feats_file, feats_meta_file, n_classes
         data_dict['mention_features'] = dict()
         for i in range(0, len(IDs)):
             data_dict['mention_features'][IDs[i]] = X[i]
+    #endif
+
+    return data_dict
+#enddef
+
+
+def load_mpe_data(mpe_idx_file):
+    data_dict = dict()
+
+    # Load the MPE index file, which we assume is in the format
+    #   <doc_id>    <label>
+    data_dict['doc_ids'] = list()
+    data_dict['caption_ids'] = dict()
+    data_dict['labels'] = dict()
+    if(mpe_idx_file is not None):
+        with open(mpe_idx_file, 'r') as f:
+            for line in f.readlines():
+                line_split = line.strip().split("\t")
+                id = line_split[0].strip()
+                data_dict['caption_ids'][id] = [None, None, None, None, None]
+                for i in range(0, 5):
+                    data_dict['caption_ids'][id][i] = id + "#" + str(i)
+                data_dict['labels'][id] = line_split[1].strip()
+                data_dict['doc_ids'].append(id)
+            #endfor
+        #endwith
     #endif
 
     return data_dict
@@ -499,3 +526,99 @@ def load_batch(ids, data_dict, task, n_classes):
 
     return batch_tensors
 #enddef
+
+
+def load_batch_mpe(ids, data_dict, n_classes):
+    """
+    Loads a batch for MPE data
+
+    :param ids:
+    :param data_dict:
+    :return:
+    """
+
+    # Load the batch tensors and size
+    batch_tensors = dict()
+    batch_size = len(ids)
+    n_seq_premise = 4 * batch_size
+    n_seq_hyp = batch_size
+
+    # Populate our sentence tensors and sequence length arrays
+    batch_tensors['premises'] = np.zeros([n_seq_premise, data_dict['max_seq_len'],
+                                          data_dict['word_embedding_width']])
+    batch_tensors['seq_lengths_premise'] = np.zeros([n_seq_premise])
+    batch_tensors['hypotheses'] = np.zeros([n_seq_hyp, data_dict['max_seq_len'],
+                                            data_dict['word_embedding_width']])
+    batch_tensors['seq_lengths_hyp'] = np.zeros([n_seq_hyp])
+    batch_tensors['DEBUG_sentences'] = np.zeros([n_seq_premise + n_seq_hyp, data_dict['max_seq_len'],
+                                                 data_dict['word_embedding_width']])
+    batch_tensors['DEBUG_seq_lengths'] = np.zeros([n_seq_premise + n_seq_hyp])
+    batch_tensors['labels'] = np.zeros([batch_size, n_classes])
+    premise_idx = 0
+    DEBUG_idx = 0
+    for i in range(0, batch_size):
+        id = ids[i]
+        batch_tensors['labels'][i] = data_dict['labels'][id]
+
+        # Each ID has five captions, the last of which is the hypothesis
+        premise_ids = list()
+        for i in range(0, 4):
+            premise_ids.append(data_dict['caption_ids'][id][i])
+        rand.shuffle(premise_ids)
+        hyp_id = data_dict['caption_ids'][id][4]
+
+        # Package the premises and hypothesis into tensors
+        for premise_id in premise_ids:
+            sentence_matrix = data_dict['sentences'][premise_id]
+            for w_idx in range(0, len(sentence_matrix)):
+                batch_tensors['premises'][premise_idx][w_idx] = sentence_matrix[w_idx]
+                batch_tensors['DEBUG_sentences'][DEBUG_idx][w_idx] = sentence_matrix[w_idx]
+            batch_tensors['seq_lengths_premise'][premise_idx] = len(sentence_matrix)
+            batch_tensors['DEBUG_seq_lengths'][DEBUG_idx] = len(sentence_matrix)
+            premise_idx += 1
+            DEBUG_idx += 1
+        #endfor
+        hyp_matrix = data_dict['sentences'][hyp_id]
+        for w_idx in range(0, len(hyp_matrix)):
+            batch_tensors['hypotheses'][i][w_idx] = hyp_matrix[w_idx]
+            batch_tensors['DEBUG_sentences'][DEBUG_idx][w_idx] = hyp_matrix[w_idx]
+        batch_tensors['seq_lengths_hyp'][i] = len(hyp_matrix)
+        batch_tensors['DEBUG_seq_lengths'][DEBUG_idx] = len(hyp_matrix)
+        DEBUG_idx += 1
+    #endfor
+
+    # Each item is the set of first/last words in each premise sentence
+    # and the hypothesis
+    for i in range(0, 4):
+        batch_tensors['premise_' + str(i) + '_first_bw'] = np.zeros([batch_size, 3])
+        batch_tensors['premise_' + str(i) + '_last_fw'] = np.zeros([batch_size, 3])
+        batch_tensors['DEBUG_premise_' + str(i) + '_first_bw'] = np.zeros([batch_size, 3])
+        batch_tensors['DEBUG_premise_' + str(i) + '_last_fw'] = np.zeros([batch_size, 3])
+    #endfor
+    batch_tensors['hyp_first_bw'] = np.zeros([batch_size, 3])
+    batch_tensors['hyp_last_fw'] = np.zeros([batch_size, 3])
+    batch_tensors['DEBUG_hyp_first_bw'] = np.zeros([batch_size, 3])
+    batch_tensors['DEBUG_hyp_last_fw'] = np.zeros([batch_size, 3])
+    for i in range(0, batch_size):
+        premise_indices = range(i*4, (i*4)+4)
+        DEBUG_indices = range(i*5, (i*5)+5)
+        for j in range(0, 4):
+            batch_tensors['premise_' + str(j) + '_first_bw'][i] = \
+                np.array([1, premise_indices[j], 0])
+            batch_tensors['premise_' + str(j) + '_last_fw'][i] = \
+                np.array([0, premise_indices[j], batch_tensors['seq_lengths_premise'][premise_indices[j]]-1])
+            batch_tensors['DEBUG_premise_' + str(j) + '_first_bw'][i] = \
+                np.array([1, DEBUG_indices[j], 0])
+            batch_tensors['DEBUG_premise_' + str(j) + '_last_fw'][i] = \
+                np.array([0, DEBUG_indices[j], batch_tensors['DEBUG_seq_lengths'][DEBUG_indices[j]]-1])
+        #endfor
+        batch_tensors['hyp_first_bw'][i] = np.array([1, i, 0])
+        batch_tensors['hyp_last_fw'][i] = np.array([0, i, batch_tensors['seq_lengths_hyp'][i]-1])
+        batch_tensors['DEBUG_hyp_first_bw'][i] = np.array([1, DEBUG_indices[4], 0])
+        batch_tensors['DEBUG_hyp_last_fw'][i] = np.array([0, DEBUG_indices[4],
+                                                          batch_tensors['DEBUG_seq_lengths'][DEBUG_indices[4]]-1])
+    #endfor
+
+    return batch_tensors
+#enddef
+

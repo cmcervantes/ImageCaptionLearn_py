@@ -73,27 +73,6 @@ def load_cca_data(id_file, scores_file, label_file, type_file):
 #enddef
 
 
-def load_nonvis_ids():
-    """
-    Loads the nonvisual mention IDs from the nonvis file
-    :return:
-    """
-    global nonvis_file
-    ids_nonvis_gold = set()
-    with open(nonvis_file, 'r') as f:
-        f.seek(0)
-        for line in f:
-            commentSplit = line.split(" # ")
-            vectorSplit = commentSplit[0].strip().split(" ")
-            if int(float(vectorSplit[0])) == 1:
-                ids_nonvis_gold.add(commentSplit[1].strip())
-        #endfor
-        f.close()
-    #endwith
-    return ids_nonvis_gold
-#enddef
-
-
 log = Logger(lvl='debug', delay=45)
 
 # Parse args
@@ -101,13 +80,18 @@ parser = ArgumentParser("ImageCaptionLearn_py: Affinity Classifier")
 parser.add_argument("--train", action='store_true', help="Trains and saves a model")
 parser.add_argument("--eval", action='store_true', help="Evaluates using a saved model")
 parser.add_argument("--max_iter", type=int, default=100, help="train opt; Max SVM/logistic iterations")
-parser.add_argument("--data_root", type=str, default="~/data/tacl201708/", help="Data directory root (assumes scores, "
-                                                                                "feats, and cca subdirs)")
-parser.add_argument("--lex_types", type=str, choices=['30k', 'coco'], default='30k', help="Lexical types to use")
-parser.add_argument("--fit_prefix", type=str, default="flickr30k_dev", help="Prefix for fit files")
-parser.add_argument("--eval_prefix", type=str, default="flickr30k_dev", help="Prefix for evaluation files")
-parser.add_argument("--cca_model_type", type=str, default="30k", help="CCA model type (internal file name part)")
-parser.add_argument("--model_root", type=str, default="~/models/tacl201708/", help="Model directory root")
+parser.add_argument("--data_root", type=str, required=True,
+                    help="Data directory root (assumes scores, feats, and cca subdirs)")
+parser.add_argument("--lex_types", type=str, choices=['30k', 'coco', 'coco_supercat'],
+                    required=True, help="Lexical types to use")
+parser.add_argument("--fit_prefix", type=str, required=True,
+                    help="Prefix for fit files")
+parser.add_argument("--eval_prefix", type=str, required=True,
+                    help="Prefix for evaluation files")
+#parser.add_argument("--cca_model_type", type=str, default="30k", help="CCA model type (internal file name part)")
+parser.add_argument("--model_root", type=str, required=True,
+                    help="Model directory root; models will be saved to "
+                         "<root>/<fit_prefix>_affinity/")
 
 args = parser.parse_args()
 arg_dict = vars(args)
@@ -116,25 +100,20 @@ util.dump_args(arg_dict, log)
 data_root = arg_dict['data_root']
 fit_prefix = arg_dict['fit_prefix']
 eval_prefix = arg_dict['eval_prefix']
-cca_model_type = arg_dict['cca_model_type']
-model_root = arg_dict['model_root']
+model_root = arg_dict['model_root'] + "/" + fit_prefix + "_affinity/"
 lexical_types = arg_dict['lex_types']
 
 # Set up all the files
 fit_id_file = abspath(expanduser(data_root + "cca/" + fit_prefix + "_id.txt"))
 fit_label_file = abspath(expanduser(data_root + "cca/" + fit_prefix + "_label.txt"))
 fit_type_file = abspath(expanduser(data_root + "cca/" + fit_prefix + "_type_" + lexical_types + ".csv"))
-fit_scores_file = abspath(expanduser(data_root + "scores/" + fit_prefix +
-                                     "_" + cca_model_type + "_ccaScores.csv"))
+fit_scores_file = abspath(expanduser(data_root + "cca/" + fit_prefix + "_ccaScores.csv"))
 eval_id_file = abspath(expanduser(data_root + "cca/" + eval_prefix + "_id.txt"))
 eval_label_file = abspath(expanduser(data_root + "cca/" + eval_prefix + "_label.txt"))
 eval_type_file = abspath(expanduser(data_root + "cca/" + eval_prefix + "_type_" + lexical_types + ".csv"))
-eval_scores_file = abspath(expanduser(data_root + "scores/" + eval_prefix +
-                                      "_" + cca_model_type + "_ccaScores.csv"))
+eval_scores_file = abspath(expanduser(data_root + "cca/" + eval_prefix + "_ccaScores.csv"))
 scores_file = abspath(expanduser(data_root + "scores/" + eval_prefix +
-                                 "_" + cca_model_type + "Model_" + lexical_types +
-                                 "Types_affinity.scores"))
-nonvis_file = abspath(expanduser(data_root + "feats/" + eval_prefix + "_nonvis.feats"))
+                                 "_" + lexical_types + "Types_affinity.scores"))
 
 
 if arg_dict['train']:
@@ -148,8 +127,7 @@ if arg_dict['train']:
         y = np.array(type_y_dict[type])
         learner = LogisticRegression(max_iter=arg_dict['max_iter'], n_jobs=-1)
         learner.fit(x, y)
-        model_file = abspath(expanduser(model_root + "affinity_" + cca_model_type.replace("Model", "") + \
-                     "_" + type + ".model"))
+        model_file = abspath(expanduser(model_root + "affinity_" + type + ".model"))
         with open(model_file, 'wb') as pickle_file:
             cPickle.dump(learner, pickle_file)
         #endwith
@@ -166,12 +144,9 @@ if arg_dict['eval']:
         for type in type_x_dict_eval.keys():
             x = np.array(type_x_dict_eval[type]).reshape((-1,1))
             y = np.array(type_y_dict_eval[type])
-            model_file = abspath(expanduser(model_root + "affinity_" + cca_model_type.replace("Model", "") + \
-                         "_" + type + ".model"))
+            model_file = abspath(expanduser(model_root + "affinity_" + type + ".model"))
             if not isfile(model_file):
-                model_file = abspath(expanduser(model_root + "affinity_" +
-                                                cca_model_type.replace("Model", "") +
-                                                "_other.model"))
+                model_file = abspath(expanduser(model_root + "affinity_other.model"))
             #endif
 
             learner = cPickle.load(open(model_file, 'r'))

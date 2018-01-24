@@ -385,7 +385,7 @@ def __init__():
               early_stopping=arg_dict['early_stopping'],
               log=log)
     elif arg_dict['predict']:
-        scores_file = data_dir + "scores/" + data_root + "_" + task + "_lstm.scores"
+        scores_file = data_dir + "scores/" + data_root + "_" + task + ".scores"
 
         # Restore our variables
         tf.reset_default_graph()

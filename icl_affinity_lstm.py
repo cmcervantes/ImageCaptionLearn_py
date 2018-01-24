@@ -375,7 +375,7 @@ def __init__():
     parser.add_argument("--data_dir", required=True,
                         type=lambda f: util.arg_path_exists(parser, f),
                         help="Directory containing raw/, feats/, and scores/ directories")
-    parser.add_argument("--data", choices=["flickr30k", "mscoco", "coco30k"],
+    parser.add_argument("--data", choices=["flickr30k", "mscoco", "coco30k", "flickr30k_v1"],
                         required=True, help="Dataset to use")
     parser.add_argument("--split", choices=["train", "dev", "test", "trainDev"],
                         required=True, help="Dataset split")
@@ -481,7 +481,7 @@ def __init__():
               eval_box_category_file=eval_box_category_file,
               log=log)
     elif arg_dict['predict']:
-        scores_file = data_dir + "scores/" + data_root + "_affinity_lstm.scores"
+        scores_file = data_dir + "scores/" + data_root + "_affinity.scores"
 
         # Restore our variables
         tf.reset_default_graph()

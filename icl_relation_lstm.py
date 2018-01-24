@@ -473,7 +473,7 @@ def __init__():
               ordered_pairs=ordered_pairs, log=log)
     elif arg_dict['predict']:
         scores_file = data_dir + "scores/" + data_root + \
-                      "_relation_" + rel_type + "_lstm.scores"
+                      "_relation_" + rel_type + ".scores"
 
         # Restore our variables
         tf.reset_default_graph()

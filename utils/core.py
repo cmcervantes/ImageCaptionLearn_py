@@ -99,3 +99,18 @@ def arg_path_exists(parser, filename):
 #enddef
 
 
+def get_full_path(path):
+    """
+    Returns the abspath/expanduser version
+    of the given path, appended with a forward
+    slash (for directories) if one was provided
+    (since abspath strips it)
+
+    :param path:
+    :return:
+    """
+    full_path = abspath(expanduser(path))
+    if path.endswith('/'):
+        full_path += '/'
+    return full_path
+#enddef
